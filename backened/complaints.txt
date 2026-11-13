@@ -1,0 +1,4 @@
+1|Roads and transport|pothole|Near college main gate|Large pothole creating a danger for two-wheelers|Submitted|5|4|200|1793039198|1
+2|Water leakage|Water leakage|Near hospital|lot amount of water leakege due to damage in munciple corporation pipeline|Resolved|4|4|300|1793077414|0
+3|Water leakage|Water leakage|Near hospital|lot amount of water leakege due to damage in munciple corporation pipeline|Submitted|4|4|300|1793077422|0
+4|Water leakage|Water leakage|Near hospital|lot amount of water leakege due to damage in munciple corporation pipeline|Submitted|4|4|300|1793077426|0

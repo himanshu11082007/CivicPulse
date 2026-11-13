@@ -1,0 +1,11 @@
+*.exe
+*.o
+*.obj
+*.bak
+.vscode/
+.idea/
+.env
+
+*.tmp
+
+*.tmp

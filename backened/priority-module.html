@@ -1,0 +1,244 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CivicPulse | Priority Management</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,sans-serif;background:#f3f7f4;color:#20352a}
+header{background:#176b45;color:white;padding:24px 6%}
+header h1{margin:0 0 8px}
+header p{margin:0;color:#d8f0df}
+main{max-width:1100px;margin:25px auto;padding:0 18px}
+.panel{background:white;padding:22px;border-radius:12px;margin-bottom:20px;box-shadow:0 3px 12px #0000000c}
+h2{margin-top:0;color:#176b45}
+form,.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+label{font-size:14px;font-weight:bold;display:block}
+input,select,textarea{width:100%;padding:10px;margin-top:6px;border:1px solid #cbd8cf;border-radius:6px;font:inherit}
+textarea{resize:vertical}
+button{background:#176b45;color:white;border:0;padding:11px 16px;border-radius:6px;cursor:pointer;font-weight:bold}
+button:hover{background:#105536}
+.full{grid-column:1/-1}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.stat{background:#e6f4e9;padding:16px;border-radius:8px}
+.stat strong{font-size:27px;display:block;margin-top:7px}
+.table-wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;min-width:700px}
+th,td{text-align:left;padding:12px;border-bottom:1px solid #e4ebe6;font-size:14px}
+th{background:#f0f6f1}
+.pill{font-weight:bold;padding:5px 8px;border-radius:20px;background:#e5eee7}
+.Critical{background:#ffe1e1;color:#a31c1c}
+.High{background:#ffebd3;color:#8b4b00}
+.Medium{background:#fff5c7;color:#705600}
+.Low{background:#dff4e4;color:#176b45}
+.tools{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:15px}
+.tools select{width:auto;min-width:160px}
+small{color:#65746a}
+@media(max-width:600px){form,.fields{grid-template-columns:1fr}.stats{grid-template-columns:1fr}.full{grid-column:auto}}
+</style>
+</head>
+<body>
+<header>
+  <h1>🌿 CivicPulse</h1>
+  <p>Smart Civic Issue Prioritization System</p>
+</header>
+
+<main>
+<section class="panel">
+  <h2>Priority Dashboard</h2>
+  <div class="stats">
+    <div class="stat">Total Complaints<strong id="total">0</strong></div>
+    <div class="stat">Critical Issues<strong id="critical">0</strong></div>
+    <div class="stat">High Priority<strong id="high">0</strong></div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Register Civic Complaint</h2>
+  <form id="complaintForm">
+    <div>
+      <label>Issue Type</label>
+      <select id="type" required>
+        <option>Pothole</option>
+        <option>Garbage Overflow</option>
+        <option>Broken Streetlight</option>
+        <option>Water Leakage</option>
+        <option>Damaged Footpath</option>
+      </select>
+    </div>
+    <div>
+      <label>Location</label>
+      <input id="location" placeholder="e.g. College main gate" required>
+    </div>
+    <div class="full">
+      <label>Description</label>
+      <textarea id="description" placeholder="Describe the issue" required></textarea>
+    </div>
+    <div>
+      <label>Safety Risk (1–5)</label>
+      <select id="safety">
+        <option value="1">1 - Very low</option>
+        <option value="2">2 - Low</option>
+        <option value="3" selected>3 - Moderate</option>
+        <option value="4">4 - Serious</option>
+        <option value="5">5 - Severe</option>
+      </select>
+    </div>
+    <div>
+      <label>Severity (1–5)</label>
+      <select id="severity">
+        <option value="1">1 - Very minor</option>
+        <option value="2">2 - Minor</option>
+        <option value="3" selected>3 - Moderate</option>
+        <option value="4">4 - Major</option>
+        <option value="5">5 - Critical</option>
+      </select>
+    </div>
+    <div>
+      <label>People Affected</label>
+      <input id="people" type="number" min="0" value="100" required>
+    </div>
+    <div>
+      <label>Waiting Time (days)</label>
+      <input id="days" type="number" min="0" value="5" required>
+    </div>
+    <button class="full" type="submit">Register & Calculate Priority</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Complaint Priority Queue</h2>
+  <div class="tools">
+    <select id="filter">
+      <option value="All">All Priorities</option>
+      <option>Critical</option>
+      <option>High</option>
+      <option>Medium</option>
+      <option>Low</option>
+    </select>
+    <button id="sort">Sort: Highest Priority First ↓</button>
+    <button id="reset" type="button">Reset Demo Data</button>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>ID</th><th>Issue</th><th>Location</th>
+        <th>Score</th><th>Priority</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <p id="message" aria-live="polite"></p>
+  <small>Demo scoring model. Scores help organize complaints; immediate dangers require separate urgent escalation.</small>
+</section>
+
+<section class="panel">
+  <h2>How Priority Is Calculated</h2>
+  <p><strong>Priority = 8S + 6V + 4A + 2T</strong></p>
+  <p>S = safety risk; V = severity; A = affected-population category; T = waiting-time category.</p>
+  <p>Each factor ranges from 1 to 5. Maximum score: 100.</p>
+  <p>80–100: Critical · 60–79: High · 40–59: Medium · 20–39: Low</p>
+</section>
+</main>
+
+<script>
+const KEY = "civicpulse-priority-demo";
+const samples = [
+ {id:1,type:"Pothole",location:"College Main Gate",description:"Large road pothole",safety:5,severity:4,people:100,days:5},
+ {id:2,type:"Garbage Overflow",location:"Market Road",description:"Waste overflowing",safety:2,severity:3,people:60,days:10},
+ {id:3,type:"Broken Streetlight",location:"Park Street",description:"Streetlight not working",safety:4,severity:3,people:30,days:2}
+];
+let issues;
+try {
+ issues = JSON.parse(localStorage.getItem(KEY)) || samples;
+ if (!Array.isArray(issues)) issues = samples;
+} catch { issues = samples; }
+let descending = true;
+
+function category(n, limits) {
+ return limits.findIndex(limit => n <= limit) + 1 || limits.length + 1;
+}
+function score(c) {
+ const A = c.people <= 5 ? 1 : c.people <= 20 ? 2 :
+           c.people <= 50 ? 3 : c.people <= 200 ? 4 : 5;
+ const T = c.days < 1 ? 1 : c.days <= 3 ? 2 :
+           c.days <= 7 ? 3 : c.days <= 14 ? 4 : 5;
+ return 8*c.safety + 6*c.severity + 4*A + 2*T;
+}
+function priority(n) {
+ return n >= 80 ? "Critical" : n >= 60 ? "High" :
+        n >= 40 ? "Medium" : "Low";
+}
+function save() {
+ try { localStorage.setItem(KEY, JSON.stringify(issues)); }
+ catch { document.getElementById("message").textContent =
+   "Storage unavailable. Data may not persist after refresh."; }
+}
+function render() {
+ document.getElementById("total").textContent = issues.length;
+ document.getElementById("critical").textContent =
+   issues.filter(c => priority(score(c)) === "Critical").length;
+ document.getElementById("high").textContent =
+   issues.filter(c => priority(score(c)) === "High").length;
+
+ const selected = document.getElementById("filter").value;
+ const visible = issues.filter(c => selected === "All" || priority(score(c)) === selected)
+   .sort((a,b) => descending ? score(b)-score(a) : score(a)-score(b));
+
+ document.getElementById("rows").innerHTML = visible.map(c => {
+   const p = priority(score(c));
+   return `<tr>
+     <td>#${c.id}</td>
+     <td>${escapeHTML(c.type)}</td>
+     <td>${escapeHTML(c.location)}</td>
+     <td><strong>${score(c)}/100</strong></td>
+     <td><span class="pill ${p}">${p}</span></td>
+   </tr>`;
+ }).join("");
+}
+function escapeHTML(value) {
+ return String(value).replace(/[&<>"']/g, ch => ({
+  "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+ }[ch]));
+}
+document.getElementById("complaintForm").addEventListener("submit", e => {
+ e.preventDefault();
+ const c = {
+   id: issues.reduce((m,x) => Math.max(m,x.id),0)+1,
+   type:document.getElementById("type").value,
+   location:document.getElementById("location").value.trim(),
+   description:document.getElementById("description").value.trim(),
+   safety:Number(document.getElementById("safety").value),
+   severity:Number(document.getElementById("severity").value),
+   people:Number(document.getElementById("people").value),
+   days:Number(document.getElementById("days").value)
+ };
+ if (!c.location || !c.description || c.people < 0 || c.days < 0) {
+   document.getElementById("message").textContent = "Please enter valid details.";
+   return;
+ }
+ issues.push(c);
+ save();
+ render();
+ document.getElementById("message").textContent =
+   `Complaint #${c.id} registered. Score: ${score(c)}/100 — ${priority(score(c))}.`;
+ e.target.reset();
+});
+document.getElementById("filter").addEventListener("change",render);
+document.getElementById("sort").addEventListener("click", () => {
+ descending = !descending;
+ document.getElementById("sort").textContent =
+   descending ? "Sort: Highest Priority First ↓" : "Sort: Lowest Priority First ↑";
+ render();
+});
+document.getElementById("reset").addEventListener("click", () => {
+ issues = samples.map(c => ({...c}));
+ save(); render();
+ document.getElementById("message").textContent = "Demo data restored.";
+});
+render();
+</script>
+</body>
+</html>

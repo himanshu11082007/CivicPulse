@@ -1,0 +1,136 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CivicPulse Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <h2>✳ CivicPulse</h2>
+    <p class="tagline">COMMUNITY CARE</p>
+    <button onclick="showView('dashboard')">▦ Dashboard</button>
+    <button onclick="showView('issues')">☷ All issues</button>
+    <button onclick="showView('report')">＋ Report an issue</button>
+    <button onclick="showView('priority')">⚑ Priority queue</button>
+    <button onclick="showView('resolved')">✓ Resolved issues</button>
+    <div class="sidebar-bottom">Small actions,<br>better communities.</div>
+  </aside>
+
+  <main>
+    <header>
+      <span>Workspace / <b id="pageTitle">Dashboard</b></span>
+      <span class="demo">● Demo environment</span>
+    </header>
+
+    <section id="dashboard" class="view">
+      <p class="eyebrow">COMMUNITY OVERVIEW</p>
+      <h1>Good morning, Admin ✳</h1>
+      <p class="muted">Here's what's happening in your community today.</p>
+
+      <div class="stats">
+        <article><span>Total issues</span><h2 id="total">8</h2></article>
+        <article><span>Needs attention</span><h2 id="attention">3</h2></article>
+        <article><span>In progress</span><h2 id="progress">2</h2></article>
+        <article><span>Resolved</span><h2 id="resolved">2</h2></article>
+      </div>
+
+      <div class="panel">
+        <h3>Recent issues</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Issue</th><th>Location</th><th>Priority</th><th>Status</th></tr></thead>
+            <tbody id="recentRows"></tbody>
+          </table>
+        </div>
+      </div>
+      <button class="primary" onclick="showView('report')">＋ Report an issue</button>
+    </section>
+
+    <section id="issues" class="view hidden">
+      <h1>All issues</h1>
+      <p class="muted">Search and manage community reports.</p>
+      <input id="search" placeholder="Search issues or locations..." oninput="renderIssues()">
+      <div class="panel table-wrap">
+        <table>
+          <thead><tr><th>Issue</th><th>Location</th><th>Priority</th><th>Status</th><th>Action</th></tr></thead>
+          <tbody id="issueRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="report" class="view hidden">
+      <h1>Report an issue</h1>
+      <p class="muted">Share a local problem to help improve your neighbourhood.</p>
+      <form id="reportForm" class="panel form">
+        <label>Issue category
+          <select id="type" required>
+            <option value="">Choose a category</option>
+            <option>Pothole</option>
+            <option>Garbage accumulation</option>
+            <option>Water leakage</option>
+            <option>Broken streetlight</option>
+            <option>Electrical hazard</option>
+            <option>Damaged footpath</option>
+          </select>
+        </label>
+        <label>Location
+          <select id="location" required>
+            <option value="">Choose location</option>
+            <option>Residential area</option>
+            <option>Near school</option>
+            <option>Busy road</option>
+            <option>Near hospital</option>
+            <option>Public park</option>
+            <option>Market area</option>
+          </select>
+        </label>
+        <label>Description
+          <textarea id="description" required maxlength="500" rows="4" placeholder="Describe the issue..."></textarea>
+        </label>
+        <label>Severity (1 = minor, 5 = critical)
+          <select id="condition" required>
+            <option value="">Choose severity</option>
+            <option value="1">1 — Very minor</option>
+            <option value="2">2 — Minor</option>
+            <option value="3">3 — Moderate</option>
+            <option value="4">4 — Major</option>
+            <option value="5">5 — Critical</option>
+          </select>
+        </label>
+        <label>Estimated people affected
+          <input id="people" type="number" min="1" required placeholder="e.g. 50">
+        </label>
+        <button class="primary" type="submit">Submit report</button>
+      </form>
+    </section>
+
+    <section id="priority" class="view hidden">
+      <h1>Priority queue</h1>
+      <p class="muted">Open issues ordered by estimated priority.</p>
+      <div class="panel table-wrap">
+        <table>
+          <thead><tr><th>Rank</th><th>Issue</th><th>Location</th><th>Score</th><th>Status</th></tr></thead>
+          <tbody id="priorityRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="resolved" class="view hidden">
+      <h1>Resolved issues</h1>
+      <p class="muted">Reports marked as resolved.</p>
+      <div class="panel table-wrap">
+        <table>
+          <thead><tr><th>Issue</th><th>Location</th><th>Priority</th><th>Status</th></tr></thead>
+          <tbody id="resolvedRows"></tbody>
+        </table>
+      </div>
+    </section>
+    <footer>CivicPulse · Student project prototype</footer>
+  </main>
+  <div id="toast" role="status"></div>
+  <script src="script.js"></script>
+</body>
+</html>

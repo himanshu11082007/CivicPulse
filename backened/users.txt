@@ -1,0 +1,2 @@
+admin|Municipal Administrator|admin123|admin|1794680000
+8080081348|Saishyam Ghadge|12345678|citizen|1794681032

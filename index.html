@@ -1,136 +1,604 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CivicPulse Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>CivicPulse | Smart Geotag Civic Resolution App</title>
+  
+  <!-- PWA & Mobile Meta Tags -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#17613a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="CivicPulse">
+  <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/854/854878.png">
+
   <link rel="stylesheet" href="style.css">
+  
+  <!-- Leaflet Map CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 </head>
 <body>
-  <aside class="sidebar">
-    <h2>✳ CivicPulse</h2>
-    <p class="tagline">COMMUNITY CARE</p>
-    <button onclick="showView('dashboard')">▦ Dashboard</button>
-    <button onclick="showView('issues')">☷ All issues</button>
-    <button onclick="showView('report')">＋ Report an issue</button>
-    <button onclick="showView('priority')">⚑ Priority queue</button>
-    <button onclick="showView('resolved')">✓ Resolved issues</button>
-    <div class="sidebar-bottom">Small actions,<br>better communities.</div>
-  </aside>
 
-  <main>
-    <header>
-      <span>Workspace / <b id="pageTitle">Dashboard</b></span>
-      <span class="demo">● Demo environment</span>
-    </header>
-
-    <section id="dashboard" class="view">
-      <p class="eyebrow">COMMUNITY OVERVIEW</p>
-      <h1>Good morning, Admin ✳</h1>
-      <p class="muted">Here's what's happening in your community today.</p>
-
-      <div class="stats">
-        <article><span>Total issues</span><h2 id="total">8</h2></article>
-        <article><span>Needs attention</span><h2 id="attention">3</h2></article>
-        <article><span>In progress</span><h2 id="progress">2</h2></article>
-        <article><span>Resolved</span><h2 id="resolved">2</h2></article>
+  <!-- ==================== AUTHENTICATION SCREEN (LOGIN / SIGN UP) ==================== -->
+  <div id="authScreen" class="auth-wrapper">
+    <div class="auth-card">
+      <div class="auth-header">
+        <span class="auth-icon">✳</span>
+        <h2>CivicPulse</h2>
+        <p class="tagline">SMART CIVIC RESOLUTION PLATFORM</p>
+        <p class="auth-subtitle">Real-life geotagged civic issue reporting & priority resolution</p>
       </div>
 
-      <div class="panel">
-        <h3>Recent issues</h3>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Issue</th><th>Location</th><th>Priority</th><th>Status</th></tr></thead>
-            <tbody id="recentRows"></tbody>
-          </table>
+      <!-- AUTH TABS -->
+      <div class="auth-tabs">
+        <button id="tabCitizenLogin" class="auth-tab-btn active" onclick="switchAuthTab('citizenLogin')">Citizen Login</button>
+        <button id="tabCitizenSignup" class="auth-tab-btn" onclick="switchAuthTab('citizenSignup')">Citizen Sign Up</button>
+        <button id="tabAdminLogin" class="auth-tab-btn" onclick="switchAuthTab('adminLogin')">Admin / Officer</button>
+      </div>
+
+      <!-- FORM 1: CITIZEN LOGIN -->
+      <form id="citizenLoginForm" class="auth-form" onsubmit="handleCitizenLogin(event)">
+        <label>Mobile Number
+          <input id="loginPhone" type="tel" placeholder="Enter your 10-digit mobile" required pattern="[0-9]{10}">
+        </label>
+        <label>Password
+          <input id="loginPassword" type="password" placeholder="Enter password" required>
+        </label>
+        <button type="submit" class="primary full-width">Log In to CivicPulse</button>
+        <p class="auth-switch-note">New user? <a href="javascript:void(0)" onclick="switchAuthTab('citizenSignup')">Create an account</a></p>
+      </form>
+
+      <!-- FORM 2: CITIZEN SIGN UP -->
+      <form id="citizenSignupForm" class="auth-form hidden" onsubmit="handleCitizenSignup(event)">
+        <label>Your Full Name
+          <input id="signupName" placeholder="e.g. your full name" required>
+        </label>
+        <label>Mobile Number
+          <input id="signupPhone" type="tel" placeholder="10-digit mobile number" required pattern="[0-9]{10}">
+        </label>
+        <label>Create Password
+          <input id="signupPassword" type="password" placeholder="Choose a password" required minlength="4">
+        </label>
+        <button type="submit" class="primary full-width">Create Citizen Account</button>
+        <p class="auth-switch-note">Already have an account? <a href="javascript:void(0)" onclick="switchAuthTab('citizenLogin')">Log in</a></p>
+      </form>
+
+      <!-- FORM 3: ADMIN / OFFICER LOGIN -->
+      <form id="adminLoginForm" class="auth-form hidden" onsubmit="handleAdminLogin(event)">
+        <div class="admin-notice">
+          <small>🛡 Municipal Officer Portal: Manage city-wide complaints, Max-Heap priority queue, and fleet dispatch.</small>
+        </div>
+        <label>Administrator Username
+          <input id="adminUsername" placeholder="Username (Default: admin)" required>
+        </label>
+        <label>Security Password / PIN
+          <input id="adminPassword" type="password" placeholder="Password (Default: admin123 or 1234)" required>
+        </label>
+        <button type="submit" class="primary full-width" style="background:#253e30;">Log In as Municipal Officer</button>
+        <p class="auth-switch-note"><a href="javascript:void(0)" onclick="switchAuthTab('citizenLogin')">← Back to Citizen Login</a></p>
+      </form>
+
+      <!-- QR CODE & PHONE APP CONNECT HELPER -->
+      <div class="phone-connect-box">
+        <div class="phone-connect-flex">
+          <img id="phoneQrCode" class="qr-code-img" src="https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=http://192.168.0.102:8080" alt="Scan to open on phone">
+          <div class="phone-connect-text">
+            <strong>📱 Open on your Phone:</strong>
+            <p class="small">Scan this QR code with your phone camera or visit:</p>
+            <code class="network-link">http://192.168.0.102:8080</code>
+            <small class="muted" style="display:block; margin-top:4px;">(Connect phone to same Wi-Fi)</small>
+          </div>
         </div>
       </div>
-      <button class="primary" onclick="showView('report')">＋ Report an issue</button>
-    </section>
+    </div>
+  </div>
 
-    <section id="issues" class="view hidden">
-      <h1>All issues</h1>
-      <p class="muted">Search and manage community reports.</p>
-      <input id="search" placeholder="Search issues or locations..." oninput="renderIssues()">
-      <div class="panel table-wrap">
-        <table>
-          <thead><tr><th>Issue</th><th>Location</th><th>Priority</th><th>Status</th><th>Action</th></tr></thead>
-          <tbody id="issueRows"></tbody>
-        </table>
+  <!-- ==================== MAIN APPLICATION APP (POST-LOGIN) ==================== -->
+  <div id="appScreen" class="app-wrapper hidden">
+    <!-- SIDEBAR NAVIGATION -->
+    <aside class="sidebar" id="mainSidebar">
+      <div class="brand">
+        <h2>✳ CivicPulse</h2>
+        <p class="tagline" id="sidebarTagline">CITIZEN PORTAL</p>
       </div>
-    </section>
 
-    <section id="report" class="view hidden">
-      <h1>Report an issue</h1>
-      <p class="muted">Share a local problem to help improve your neighbourhood.</p>
-      <form id="reportForm" class="panel form">
-        <label>Issue category
-          <select id="type" required>
-            <option value="">Choose a category</option>
-            <option>Pothole</option>
-            <option>Garbage accumulation</option>
-            <option>Water leakage</option>
-            <option>Broken streetlight</option>
-            <option>Electrical hazard</option>
-            <option>Damaged footpath</option>
-          </select>
-        </label>
-        <label>Location
-          <select id="location" required>
-            <option value="">Choose location</option>
-            <option>Residential area</option>
-            <option>Near school</option>
-            <option>Busy road</option>
-            <option>Near hospital</option>
-            <option>Public park</option>
-            <option>Market area</option>
-          </select>
-        </label>
-        <label>Description
-          <textarea id="description" required maxlength="500" rows="4" placeholder="Describe the issue..."></textarea>
-        </label>
-        <label>Severity (1 = minor, 5 = critical)
-          <select id="condition" required>
-            <option value="">Choose severity</option>
-            <option value="1">1 — Very minor</option>
-            <option value="2">2 — Minor</option>
-            <option value="3">3 — Moderate</option>
-            <option value="4">4 — Major</option>
-            <option value="5">5 — Critical</option>
-          </select>
-        </label>
-        <label>Estimated people affected
-          <input id="people" type="number" min="1" required placeholder="e.g. 50">
-        </label>
-        <button class="primary" type="submit">Submit report</button>
-      </form>
-    </section>
+      <!-- CITIZEN NAVIGATION -->
+      <nav class="nav-links" id="citizenNav">
+        <button id="nav-report" class="active" onclick="showView('report')">📷 Report with Geotag</button>
+        <button id="nav-myComplaints" onclick="showView('myComplaints')">📋 My Complaints</button>
+      </nav>
 
-    <section id="priority" class="view hidden">
-      <h1>Priority queue</h1>
-      <p class="muted">Open issues ordered by estimated priority.</p>
-      <div class="panel table-wrap">
-        <table>
-          <thead><tr><th>Rank</th><th>Issue</th><th>Location</th><th>Score</th><th>Status</th></tr></thead>
-          <tbody id="priorityRows"></tbody>
-        </table>
+      <!-- ADMIN / OFFICER NAVIGATION -->
+      <nav class="nav-links hidden" id="adminNav">
+        <button id="nav-dashboard" onclick="showView('dashboard')">▦ Dashboard</button>
+        <button id="nav-citizens" onclick="showView('citizens')">👥 Registered Citizens</button>
+        <button id="nav-issues" onclick="showView('issues')">☷ All City Complaints</button>
+        <button id="nav-priority" onclick="showView('priority')">⚑ Priority Queue (Heap)</button>
+        <button id="nav-map" onclick="showView('mapView')">🗺 Interactive Map & Route</button>
+        <button id="nav-resolved" onclick="showView('resolved')">✓ Resolved Issues</button>
+        <button id="nav-fds" onclick="showView('fds')">⚗ FDS Live Inspector</button>
+      </nav>
+
+      <!-- SIDEBAR BOTTOM PROFILE -->
+      <div class="sidebar-bottom">
+        <div class="user-card" id="userCard">
+          <span class="user-badge" id="roleBadge">👤 Citizen</span>
+          <strong id="userNameDisplay">Citizen</strong>
+          <small id="userPhoneDisplay" class="muted">+91 ----------</small>
+        </div>
+        <button class="logout-btn" onclick="logout()">⎋ Log Out</button>
       </div>
-    </section>
+    </aside>
 
-    <section id="resolved" class="view hidden">
-      <h1>Resolved issues</h1>
-      <p class="muted">Reports marked as resolved.</p>
-      <div class="panel table-wrap">
-        <table>
-          <thead><tr><th>Issue</th><th>Location</th><th>Priority</th><th>Status</th></tr></thead>
-          <tbody id="resolvedRows"></tbody>
-        </table>
+    <!-- MAIN APP CONTAINER -->
+    <main id="mainContainer">
+      <!-- TOP HEADER -->
+      <header>
+        <div class="header-left">
+          <span class="header-title">Workspace / <b id="pageTitle">Report with Geotag</b></span>
+          <span id="backendBadge" class="demo-badge pill-green">● C++ Multi-Tenant Engine Active</span>
+        </div>
+        <div class="header-right">
+          <button id="pwaInstallBtn" class="install-pwa-btn hidden" onclick="installPwa()">📱 Install on Phone</button>
+          <div class="header-user-info">
+            <span id="headerRolePill" class="role-pill citizen-pill">Citizen</span>
+            <span id="headerUserName" class="header-name">Citizen</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- ==================== CITIZEN VIEWS ==================== -->
+
+      <!-- VIEW 1: REPORT CIVIC ISSUE (GEOTAG MANDATORY, STEP 2 AUTOMATIC) -->
+      <section id="report" class="view">
+        <div class="view-intro">
+          <h1>Report a Civic Issue</h1>
+          <p class="muted">Take a photo using your phone camera or upload a geotagged image. Location and priority are automatically calculated from your photo!</p>
+        </div>
+
+        <!-- STEP 1: PHOTO & GEOTAG (COMPULSORY) -->
+        <div class="panel geotag-capture-card">
+          <div class="step-title-row">
+            <span class="step-num">1</span>
+            <div>
+              <h3>Take Photo or Upload Geotagged Image (Compulsory)</h3>
+              <p class="muted small">Your location is directly extracted from the photo GPS coordinates.</p>
+            </div>
+          </div>
+
+          <div class="upload-options-grid">
+            <!-- CAMERA -->
+            <div class="camera-card">
+              <button type="button" class="primary full-width" onclick="toggleCamera()">
+                📸 Open Camera & Capture Photo
+              </button>
+              <video id="cameraVideo" autoplay playsinline style="display:none;"></video>
+              <canvas id="cameraCanvas" style="display:none;"></canvas>
+              <button type="button" id="snapBtn" class="primary full-width" style="display:none; margin-top:8px; background:#124729;" onclick="takePhotoSnapshot()">
+                🔘 Snap Photo Now
+              </button>
+            </div>
+
+            <!-- FILE UPLOAD -->
+            <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
+              <input type="file" id="fileInput" accept="image/*" style="display:none" onchange="handleFileSelect(event)">
+              <div class="dropzone-content">
+                <span class="upload-icon">📁</span>
+                <strong>Choose Photo from Device</strong>
+                <small>Auto-reads embedded GPS latitude & longitude</small>
+              </div>
+            </div>
+          </div>
+
+          <!-- PHOTO & EXTRACTED LOCATION DISPLAY -->
+          <div id="photoSuccessCard" class="photo-success-card hidden">
+            <div class="photo-success-flex">
+              <img id="previewImg" src="" alt="Captured issue photo" class="preview-thumbnail">
+              <div class="photo-success-details">
+                <span class="pill-badge pill-green">✓ Photo Captured & Geotagged</span>
+                <h4 id="extractedIssueTitle">Civic Issue Identified</h4>
+                <div class="extracted-location-badge">
+                  <span>📍 <b>Extracted GPS:</b> <span id="dispLat">0.0000</span>, <span id="dispLng">0.0000</span></span>
+                  <span id="dispAddress" class="disp-address">Finding address...</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 2: REVIEW & SUBMIT (MINIMAL & AUTOMATIC) -->
+        <form id="reportForm" class="panel form" onsubmit="submitCitizenComplaint(event)">
+          <div class="step-title-row">
+            <span class="step-num">2</span>
+            <div>
+              <h3>Confirm & Submit</h3>
+              <p class="muted small">Location is locked from your photo above. Review issue type and tap submit.</p>
+            </div>
+          </div>
+
+          <div class="form-grid-simplified">
+            <label>Issue Type
+              <select id="type" required>
+                <option value="Pothole">🕳 Road Pothole</option>
+                <option value="Garbage accumulation">🗑 Garbage Accumulation / Overflow</option>
+                <option value="Water leakage">💧 Water Pipeline Leakage</option>
+                <option value="Broken streetlight">💡 Broken Streetlight</option>
+                <option value="Electrical hazard">⚡ Exposed Electrical Cable / Hazard</option>
+                <option value="Damaged footpath">🚶 Damaged Footpath / Pavement</option>
+                <option value="Other">⚠️ Other Civic Issue</option>
+              </select>
+            </label>
+
+            <label class="full-col">Additional Description (Optional)
+              <textarea id="description" rows="2" placeholder="e.g. Near corner of street, blocking traffic..."></textarea>
+            </label>
+
+            <label class="checkbox-label full-col">
+              <input id="urgent" type="checkbox">
+              <span><b>Flag as URGENT Hazard</b> (Needs emergency municipal response)</span>
+            </label>
+          </div>
+
+          <input type="hidden" id="photoUrl" value="">
+          <input type="hidden" id="latitude" value="">
+          <input type="hidden" id="longitude" value="">
+          <input type="hidden" id="location" value="">
+
+          <div class="form-actions">
+            <button class="primary full-width" type="submit" id="submitReportBtn">🚀 Submit Civic Complaint to Municipal Corporation</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- VIEW 2: MY COMPLAINTS (PRIVATE TO LOGGED-IN CITIZEN) -->
+      <section id="myComplaints" class="view hidden">
+        <div class="view-header">
+          <div>
+            <h1>My Submitted Complaints</h1>
+            <p class="muted">Live status tracking for complaints reported by you. Only visible to your account.</p>
+          </div>
+          <button class="primary" onclick="showView('report')">＋ Report New Issue</button>
+        </div>
+
+        <div class="citizen-complaints-list" id="citizenComplaintsList">
+          <!-- Dynamically populated from C++ Backend -->
+        </div>
+      </section>
+
+      <!-- ==================== ADMIN VIEWS (OFFICER ACCESS ONLY) ==================== -->
+
+      <!-- VIEW 3: ADMIN DASHBOARD -->
+      <section id="dashboard" class="view hidden">
+        <p class="eyebrow">MUNICIPAL PULSE & OVERVIEW</p>
+        <h1>Municipal Admin Dashboard ✳</h1>
+        <p class="muted">Real-time civic complaints submitted by all citizens across city sectors, prioritized via C++ Binary Max-Heap with Dijkstra fleet routing.</p>
+
+        <div class="stats">
+          <article>
+            <span>Total complaints</span>
+            <h2 id="total">0</h2>
+            <small class="trend">All citizen reports</small>
+          </article>
+          <article class="stat-attention">
+            <span>Needs attention</span>
+            <h2 id="attention">0</h2>
+            <small class="trend">Critical / High priority</small>
+          </article>
+          <article class="stat-progress">
+            <span>In progress</span>
+            <h2 id="progress">0</h2>
+            <small class="trend">Active field crew</small>
+          </article>
+          <article class="stat-resolved">
+            <span>Resolved</span>
+            <h2 id="resolved">0</h2>
+            <small class="trend">Completed repairs</small>
+          </article>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header-flex">
+            <h3>Recent Complaints (All Citizens)</h3>
+            <button class="secondary-btn" onclick="showView('issues')">View All Issues ➔</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Photo</th>
+                  <th>Issue</th>
+                  <th>Reported By</th>
+                  <th>Location / GPS</th>
+                  <th>Score</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="recentRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 4: REGISTERED CITIZENS DIRECTORY (ADMIN ONLY) -->
+      <section id="citizens" class="view hidden">
+        <div class="view-header">
+          <div>
+            <h1>Registered Citizen Accounts</h1>
+            <p class="muted">Live directory of all citizens who have signed up and reported issues from their phones or desktop.</p>
+          </div>
+        </div>
+
+        <div class="panel table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Citizen Name</th>
+                <th>Mobile Number</th>
+                <th>Registered Date</th>
+                <th>Complaints Filed</th>
+              </tr>
+            </thead>
+            <tbody id="citizenDirectoryRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- VIEW 5: ALL CITY COMPLAINTS (ADMIN ONLY) -->
+      <section id="issues" class="view hidden">
+        <div class="view-header">
+          <div>
+            <h1>All Community Complaints</h1>
+            <p class="muted">Master registry of complaints submitted by citizens across all municipal wards.</p>
+          </div>
+          <div class="filter-controls">
+            <input id="search" placeholder="🔍 Search issues, locations, citizen..." oninput="renderAdminIssues()">
+            <select id="statusFilter" onchange="renderAdminIssues()">
+              <option value="all">All Statuses</option>
+              <option value="Submitted">Submitted</option>
+              <option value="In Progress">In Progress</option>
+              <option value="Resolved">Resolved</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="panel table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Photo</th>
+                <th>Issue & Category</th>
+                <th>Citizen / Contact</th>
+                <th>Location & GPS</th>
+                <th>Priority Score</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="issueRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- VIEW 6: PRIORITY QUEUE (ADMIN ONLY - C++ MAX-HEAP) -->
+      <section id="priority" class="view hidden">
+        <div class="view-header">
+          <div>
+            <h1>Priority Queue (C++ Binary Max-Heap)</h1>
+            <p class="muted">Complaints dynamically ordered by priority score via C++ Max-Heap in O(log N) time.</p>
+          </div>
+          <button class="primary" onclick="requestDispatchRoute()">🚐 Calculate Dijkstra Municipal Service Route</button>
+        </div>
+
+        <div id="dispatchCard" class="panel dispatch-card hidden">
+          <div class="dispatch-header">
+            <h3>🚐 Municipal Repair Crew Optimal Route</h3>
+            <span class="pill-badge pill-green">Dijkstra's Shortest Path</span>
+          </div>
+          <p><b>Departure Hub:</b> <span id="routeHub">Municipal Central Depot</span></p>
+          <p><b>Waypoints:</b> <span id="routeWaypoints">Calculating...</span></p>
+          <div class="route-metrics">
+            <span><b>Total Distance:</b> <span id="routeDistance">0.0 km</span></span>
+            <span><b>Estimated Time:</b> <span id="routeTime">0 mins</span></span>
+          </div>
+        </div>
+
+        <div class="panel table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Heap Rank</th>
+                <th>Photo</th>
+                <th>Issue</th>
+                <th>Citizen</th>
+                <th>Location</th>
+                <th>Score</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="priorityRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- VIEW 7: MAP & ROUTE (ADMIN ONLY) -->
+      <section id="mapView" class="view hidden">
+        <div class="view-header">
+          <div>
+            <h1>Municipal Dispatch & Service Map</h1>
+            <p class="muted">Spatial distribution of complaints with live priority markers and Dijkstra service routes.</p>
+          </div>
+          <div class="map-legend">
+            <span class="legend-dot red">● Critical</span>
+            <span class="legend-dot orange">● High</span>
+            <span class="legend-dot blue">● Medium</span>
+            <span class="legend-dot green">● Low</span>
+            <span class="legend-dot purple">★ Depot</span>
+          </div>
+        </div>
+        <div class="panel">
+          <div id="fullMap" class="map-container" style="height: 520px; border-radius: 8px;"></div>
+        </div>
+      </section>
+
+      <!-- VIEW 8: RESOLVED ISSUES (ADMIN ONLY) -->
+      <section id="resolved" class="view hidden">
+        <h1>Resolved Community Issues</h1>
+        <p class="muted">Successfully fixed issues with resolution notes, timestamps, and technician assignment.</p>
+        <div class="panel table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Photo</th>
+                <th>Issue</th>
+                <th>Citizen</th>
+                <th>Location</th>
+                <th>Resolution Notes & Assigned Officer</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="resolvedRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- VIEW 9: FDS LIVE INSPECTOR (ADMIN ONLY) -->
+      <section id="fds" class="view hidden">
+        <h1>Fundamentals of Data Structures (FDS) Inspector</h1>
+        <p class="muted">Live academic visualizer demonstrating C++ Data Structures implementation and performance metrics.</p>
+
+        <div class="fds-grid">
+          <!-- 1. BINARY MAX-HEAP -->
+          <article class="panel fds-card">
+            <div class="fds-card-header">
+              <h3>1. Binary Max-Heap (Priority Queue)</h3>
+              <span class="pill-badge pill-green">O(log N) Insert & Extract</span>
+            </div>
+            <p>Maintains priority order. Root is always the highest priority civic complaint.</p>
+            <div class="fds-metric-list">
+              <div><span>Heap Elements:</span> <strong id="fdsHeapCount">0</strong></div>
+              <div><span>Tree Height:</span> <strong id="fdsHeapHeight">0</strong></div>
+              <div><span>Peek Max:</span> <strong>O(1)</strong></div>
+              <div><span>Extract Max:</span> <strong>O(log N)</strong></div>
+            </div>
+            <div class="fds-tree-visual" id="heapArrayView">
+              <code>Heap array: [Empty]</code>
+            </div>
+          </article>
+
+          <!-- 2. BINARY SEARCH TREE -->
+          <article class="panel fds-card">
+            <div class="fds-card-header">
+              <h3>2. Binary Search Tree (BST)</h3>
+              <span class="pill-badge pill-blue">O(log N) ID Index</span>
+            </div>
+            <p>Indexes all complaints uniquely by ID. In-order traversal generates sorted ID records.</p>
+            <div class="fds-metric-list">
+              <div><span>Total BST Nodes:</span> <strong id="fdsBstCount">0</strong></div>
+              <div><span>Tree Height:</span> <strong id="fdsBstHeight">0</strong></div>
+            </div>
+            <div class="bst-search-tester">
+              <label>Test BST Search Lookup:</label>
+              <div style="display:flex; gap:8px;">
+                <input id="bstTestId" type="number" placeholder="Enter ID (e.g. 1)" style="max-width:160px;">
+                <button class="secondary-btn" onclick="testBstSearch()">Execute Search</button>
+              </div>
+              <div id="bstSearchResult" class="bst-result-box">Search test output...</div>
+            </div>
+          </article>
+
+          <!-- 3. CIVIC GRAPH & DIJKSTRA -->
+          <article class="panel fds-card">
+            <div class="fds-card-header">
+              <h3>3. City Graph & Dijkstra Shortest Path</h3>
+              <span class="pill-badge pill-purple">O((V + E) log V)</span>
+            </div>
+            <p>Road network graph connecting municipal hubs and complaint locations.</p>
+            <div class="fds-metric-list">
+              <div><span>Graph Vertices:</span> <strong id="fdsVertices">9</strong></div>
+              <div><span>Road Edges:</span> <strong id="fdsEdges">12</strong></div>
+            </div>
+            <div class="graph-nodes-list" id="graphNodesList">
+              <code>Nodes: Municipal Central Depot, Near School, Near Hospital, Market Area...</code>
+            </div>
+          </article>
+
+          <!-- 4. DOUBLY LINKED LIST -->
+          <article class="panel fds-card">
+            <div class="fds-card-header">
+              <h3>4. Doubly Linked List (Audit Log)</h3>
+              <span class="pill-badge pill-yellow">O(1) Append / Bidirectional</span>
+            </div>
+            <p>Maintains persistent resolution history and complaint status changes.</p>
+            <div class="fds-metric-list">
+              <div><span>Audit Records:</span> <strong id="fdsAuditCount">0</strong></div>
+              <div><span>Traversal:</span> <strong>Bidirectional</strong></div>
+            </div>
+            <div id="auditLogList" class="audit-trail-container"></div>
+          </article>
+        </div>
+      </section>
+
+      <!-- RESOLUTION MODAL -->
+      <div id="resolutionModal" class="modal-overlay hidden">
+        <div class="modal-card">
+          <div class="modal-header">
+            <h3 id="modalTitle">Update & Resolve Complaint</h3>
+            <button class="close-btn" onclick="closeModal()">✕</button>
+          </div>
+          <div class="modal-body">
+            <p id="modalIssueDetails" class="muted">Loading issue details...</p>
+            <form id="resolutionForm" onsubmit="submitResolution(event)">
+              <input type="hidden" id="modalComplaintId">
+              <label>Update Status
+                <select id="modalStatusSelect" required>
+                  <option value="Submitted">Submitted (Under review)</option>
+                  <option value="In Progress">In Progress (Field crew assigned)</option>
+                  <option value="Resolved">Resolved (Work completed)</option>
+                  <option value="Closed">Closed (Verified & archived)</option>
+                </select>
+              </label>
+              <label>Assigned Officer / Technician
+                <input id="modalOfficer" placeholder="e.g. Road Maintenance Crew, Electrical Inspector" required>
+              </label>
+              <label>Resolution Notes & Action Taken
+                <textarea id="modalNotes" rows="3" placeholder="Describe the repair work conducted, materials used, or inspection outcome..." required></textarea>
+              </label>
+              <div class="modal-actions">
+                <button type="submit" class="primary">Save Status & Update FDS Engine</button>
+                <button type="button" class="secondary-btn" onclick="closeModal()">Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>
       </div>
-    </section>
-    <footer>CivicPulse · Student project prototype</footer>
-  </main>
-  <div id="toast" role="status"></div>
+
+      <!-- TOAST NOTIFICATIONS -->
+      <div id="toast" role="status"></div>
+
+      <footer>CivicPulse · Fundamentals of Data Structures (C++) Project · Real-Life Civic Platform</footer>
+    </main>
+
+    <!-- MOBILE BOTTOM NAVIGATION (Smartphones) -->
+    <nav class="mobile-bottom-nav" id="mobileBottomNav">
+      <button id="mob-report" class="active" onclick="showView('report')">
+        <span>📷</span>
+        <small>Report</small>
+      </button>
+      <button id="mob-myComplaints" onclick="showView('myComplaints')">
+        <span>📋</span>
+        <small>My Issues</small>
+      </button>
+      <button id="mob-user" onclick="logout()">
+        <span>⎋</span>
+        <small>Log Out</small>
+      </button>
+    </nav>
+  </div>
+
   <script src="script.js"></script>
 </body>
 </html>

@@ -1,4 +1,3 @@
-
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -9,63 +8,111 @@
 #include <iomanip>
 #include <atomic>
 #include <sstream>
-#include "third_party/httplib/httplib.h"
-#include "third_party/nlohmann/json.hpp"
 #include <mutex>
 #include <thread>
+#include <cmath>
+
+#include "Complaint.h"
+#include "ds/MaxHeap.h"
+#include "ds/BST.h"
+#include "ds/CivicGraph.h"
+#include "ds/DoublyLinkedList.h"
+
+#include "third_party/httplib/httplib.h"
+#include "third_party/nlohmann/json.hpp"
+
 using namespace std;
+using json = nlohmann::json;
 
-const string FILE_NAME = "complaints.txt";
+const string COMPLAINTS_FILE = "complaints.txt";
+const string USERS_FILE = "users.txt";
 
-struct Complaint {
-    int id = 0;
-    string category, type, location, description, status;
-    int safety = 1;
-    int severity = 1;
-    int people = 1;
-    long long reportedAt = 0;
-    bool urgent = false;
+// ---------- USER MODEL ----------
+
+struct UserAccount {
+    string phone;
+    string name;
+    string password;
+    string role = "citizen"; // "citizen" | "admin"
+    long long registeredAt = 0;
+
+    string serialize() const {
+        return phone + '|' + name + '|' + password + '|' + role + '|' + to_string(registeredAt);
+    }
+
+    static UserAccount deserialize(const string& line) {
+        UserAccount u;
+        stringstream ss(line);
+        string token;
+        vector<string> parts;
+        while (getline(ss, token, '|')) {
+            parts.push_back(token);
+        }
+        if (parts.size() >= 4) {
+            u.phone = parts[0];
+            u.name = parts[1];
+            u.password = parts[2];
+            u.role = parts[3];
+            if (parts.size() >= 5) {
+                u.registeredAt = stoll(parts[4]);
+            }
+        }
+        return u;
+    }
 };
 
+// Concurrency and Server Management
 std::mutex dataMutex;
 httplib::Server apiServer;
 std::atomic<bool> serverRunning{false};
 
-using json = nlohmann::json;
+// Core Data Structures (Fundamentals of Data Structures)
+std::vector<Complaint> allComplaints;
+std::vector<UserAccount> allUsers;
+MaxHeap priorityHeap;             // Binary Max-Heap for priority queue
+BST idIndex;                      // Binary Search Tree for O(log n) lookup
+CivicGraph cityGraph;             // Graph with Adjacency List for Dijkstra route dispatch
+ResolutionAuditLog auditTrail;    // Doubly Linked List for resolution history
+int nextId = 1;
 
-int affectedScore(int people) {
-    if (people <= 5) return 1;
-    if (people <= 20) return 2;
-    if (people <= 50) return 3;
-    if (people <= 200) return 4;
-    return 5;
+// ---------- USERS FILE PERSISTENCE ----------
+
+void loadUsersFromFile() {
+    allUsers.clear();
+    ifstream file(USERS_FILE);
+    if (!file) {
+        // Create initial default admin
+        UserAccount admin;
+        admin.phone = "admin";
+        admin.name = "Municipal Administrator";
+        admin.password = "admin123";
+        admin.role = "admin";
+        admin.registeredAt = static_cast<long long>(time(nullptr));
+        allUsers.push_back(admin);
+        return;
+    }
+
+    string line;
+    while (getline(file, line)) {
+        if (line.empty()) continue;
+        try {
+            UserAccount u = UserAccount::deserialize(line);
+            if (!u.phone.empty()) {
+                allUsers.push_back(u);
+            }
+        } catch (...) {}
+    }
 }
 
-int waitingScore(long long reportedAt) {
-    long long days = (time(nullptr) - reportedAt) / 86400;
-    if (days < 1) return 1;
-    if (days <= 3) return 2;
-    if (days <= 7) return 3;
-    if (days <= 14) return 4;
-    return 5;
+void saveUsersToFile() {
+    ofstream file(USERS_FILE);
+    if (!file) return;
+    for (const auto& u : allUsers) {
+        file << u.serialize() << '\n';
+    }
 }
 
-int calculatePriority(const Complaint& c) {
-    return 8 * c.safety
-         + 6 * c.severity
-         + 4 * affectedScore(c.people)
-         + 2 * waitingScore(c.reportedAt);
-}
-
-string getPriorityLabel(const Complaint& c) {
-    if (c.urgent) return "URGENT";
-
-    int score = calculatePriority(c);
-    if (score >= 80) return "Critical";
-    if (score >= 60) return "High";
-    if (score >= 40) return "Medium";
-    return "Low";
-}
+// ---------- COMPLAINT SERIALIZERS ----------
 
 json complaintToJson(const Complaint& c) {
     return {
@@ -80,41 +127,44 @@ json complaintToJson(const Complaint& c) {
         {"people", c.people},
         {"reportedAt", c.reportedAt},
         {"urgent", c.urgent},
-        {"priorityScore", calculatePriority(c)},
-        {"priority", getPriorityLabel(c)}
+        {"priorityScore", c.priorityScore()},
+        {"priority", c.priorityLabel()},
+        {"latitude", c.latitude},
+        {"longitude", c.longitude},
+        {"photoUrl", c.photoUrl},
+        {"resolvedAt", c.resolvedAt},
+        {"resolutionNotes", c.resolutionNotes},
+        {"assignedTo", c.assignedTo},
+        {"citizenPhone", c.citizenPhone},
+        {"citizenName", c.citizenName}
     };
 }
 
-vector<Complaint> complaints;
-int nextId = 1;
-
-json getAllComplaintsJson() {
+json getAllComplaintsJson(const string& filterPhone = "") {
     json result = json::array();
-
-    for (const auto& complaint : complaints) {
-        result.push_back(complaintToJson(complaint));
+    for (const auto& c : allComplaints) {
+        if (filterPhone.empty() || c.citizenPhone == filterPhone) {
+            result.push_back(complaintToJson(c));
+        }
     }
-
     return result;
 }
 
 json getDashboardJson() {
-    int total = 0;
+    int total = static_cast<int>(allComplaints.size());
     int attention = 0;
     int inProgress = 0;
     int resolved = 0;
 
-    for (const auto& c : complaints) {
-        total++;
-
+    for (const auto& c : allComplaints) {
         if (c.status == "Submitted" || c.status == "In Progress") {
-            attention++;
+            if (c.urgent || c.priorityScore() >= 60) {
+                attention++;
+            }
         }
-
         if (c.status == "In Progress") {
             inProgress++;
         }
-
         if (c.status == "Resolved" || c.status == "Closed") {
             resolved++;
         }
@@ -124,694 +174,591 @@ json getDashboardJson() {
         {"total", total},
         {"attention", attention},
         {"progress", inProgress},
-        {"resolved", resolved}
+        {"resolved", resolved},
+        {"totalCitizens", allUsers.size()}
     };
 }
 
-void saveToFile();
+// ---------- PERSISTENCE & FDS SYNC ----------
+
+void syncDataStructures() {
+    priorityHeap.clear();
+    idIndex.clear();
+
+    for (const auto& c : allComplaints) {
+        idIndex.insert(c);
+        if (c.status != "Resolved" && c.status != "Closed") {
+            priorityHeap.insert(c);
+        }
+    }
+}
+
+void saveComplaintsToFile() {
+    ofstream file(COMPLAINTS_FILE);
+    if (!file) {
+        cerr << "[CivicPulse Error] Unable to open " << COMPLAINTS_FILE << " for writing.\n";
+        return;
+    }
+
+    for (const auto& c : allComplaints) {
+        file << c.serialize() << '\n';
+    }
+}
+
+void loadComplaintsFromFile() {
+    allComplaints.clear();
+    auditTrail.clear();
+
+    ifstream file(COMPLAINTS_FILE);
+    if (!file) {
+        cout << "[CivicPulse Info] complaints.txt initialized cleanly with 0 records.\n";
+        return;
+    }
+
+    string line;
+    while (getline(file, line)) {
+        if (line.empty()) continue;
+        try {
+            Complaint c = Complaint::deserialize(line);
+            if (c.id > 0) {
+                allComplaints.push_back(c);
+                nextId = max(nextId, c.id + 1);
+            }
+        } catch (const exception& e) {
+            cerr << "[CivicPulse Warning] Skipped invalid line: " << e.what() << '\n';
+        }
+    }
+
+    syncDataStructures();
+    cout << "[CivicPulse] Loaded " << allComplaints.size() << " real complaints into FDS engine.\n";
+}
+
+// ---------- API ROUTES SETUP ----------
 
 void setupApiRoutes() {
-    apiServer.Get("/api/health", [](const httplib::Request& req,
-                                    httplib::Response& res) {
-        res.set_content(
-            R"({"status":"ok","project":"CivicPulse"})",
-            "application/json"
-        );
+    apiServer.set_default_headers({
+        {"Access-Control-Allow-Origin", "*"},
+        {"Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS"},
+        {"Access-Control-Allow-Headers", "Content-Type"}
     });
 
-
-    apiServer.Get("/api/complaints", [](const httplib::Request& req,
-                                        httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(dataMutex);
-
-        res.set_content(
-            getAllComplaintsJson().dump(2),
-            "application/json"
-        );
+    apiServer.Options(R"(/.*)", [](const httplib::Request&, httplib::Response& res) {
+        res.status = 204;
     });
 
-    apiServer.Get("/api/dashboard", [](const httplib::Request& req,
-                                       httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(dataMutex);
-        res.set_content(getDashboardJson().dump(2), "application/json");
+    // Health check
+    apiServer.Get("/api/health", [](const httplib::Request&, httplib::Response& res) {
+        json info = {
+            {"status", "ok"},
+            {"project", "CivicPulse"},
+            {"version", "3.0-Production"},
+            {"networkIp", "192.168.0.102"},
+            {"structures", {"Binary Max-Heap", "Binary Search Tree", "Graph (Dijkstra)", "Doubly Linked List"}}
+        };
+        res.set_content(info.dump(2), "application/json");
     });
-   
-    apiServer.Post("/api/complaints", [](const httplib::Request& req,
-                                         httplib::Response& res) {
+
+    // ---------- AUTHENTICATION ROUTES ----------
+
+    // Citizen Sign-Up
+    apiServer.Post("/api/auth/register", [](const httplib::Request& req, httplib::Response& res) {
         json body;
-
         try {
             body = json::parse(req.body);
         } catch (...) {
             res.status = 400;
-            res.set_content(
-                R"({"error":"Invalid JSON"})",
-                "application/json"
-            );
+            res.set_content(R"({"error":"Invalid JSON"})", "application/json");
+            return;
+        }
+
+        string phone = body.value("phone", "");
+        string name = body.value("name", "");
+        string password = body.value("password", "");
+
+        if (phone.empty() || name.empty()) {
+            res.status = 400;
+            res.set_content(R"({"error":"Name and Phone number are required"})", "application/json");
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(dataMutex);
+        for (const auto& u : allUsers) {
+            if (u.phone == phone) {
+                res.status = 409;
+                res.set_content(R"({"error":"Mobile number already registered. Please log in."})", "application/json");
+                return;
+            }
+        }
+
+        UserAccount newUser;
+        newUser.phone = phone;
+        newUser.name = name;
+        newUser.password = password;
+        newUser.role = "citizen";
+        newUser.registeredAt = static_cast<long long>(time(nullptr));
+
+        allUsers.push_back(newUser);
+        saveUsersToFile();
+
+        json resp = {
+            {"success", true},
+            {"user", {
+                {"phone", newUser.phone},
+                {"name", newUser.name},
+                {"role", newUser.role},
+                {"registeredAt", newUser.registeredAt}
+            }}
+        };
+        res.status = 201;
+        res.set_content(resp.dump(2), "application/json");
+    });
+
+    // Sign-In (Citizen or Admin)
+    apiServer.Post("/api/auth/login", [](const httplib::Request& req, httplib::Response& res) {
+        json body;
+        try {
+            body = json::parse(req.body);
+        } catch (...) {
+            res.status = 400;
+            res.set_content(R"({"error":"Invalid JSON"})", "application/json");
+            return;
+        }
+
+        string phone = body.value("phone", "");
+        string password = body.value("password", "");
+        string role = body.value("role", "citizen");
+
+        std::lock_guard<std::mutex> lock(dataMutex);
+
+        if (role == "admin") {
+            if ((phone == "admin" || phone == "admin@civicpulse.org") &&
+                (password == "admin123" || password == "1234")) {
+                json resp = {
+                    {"success", true},
+                    {"user", {
+                        {"phone", "admin"},
+                        {"name", "Municipal Administrator"},
+                        {"role", "admin"}
+                    }}
+                };
+                res.set_content(resp.dump(2), "application/json");
+                return;
+            } else {
+                res.status = 401;
+                res.set_content(R"({"error":"Invalid Administrator credentials. Default password is 'admin123' or PIN '1234'."})", "application/json");
+                return;
+            }
+        }
+
+        // Citizen Login
+        for (const auto& u : allUsers) {
+            if (u.phone == phone && u.role == "citizen") {
+                if (!password.empty() && !u.password.empty() && u.password != password) {
+                    res.status = 401;
+                    res.set_content(R"({"error":"Incorrect password for this mobile number."})", "application/json");
+                    return;
+                }
+                json resp = {
+                    {"success", true},
+                    {"user", {
+                        {"phone", u.phone},
+                        {"name", u.name},
+                        {"role", u.role},
+                        {"registeredAt", u.registeredAt}
+                    }}
+                };
+                res.set_content(resp.dump(2), "application/json");
+                return;
+            }
+        }
+
+        // If phone not yet registered, auto-register citizen if name was sent
+        string name = body.value("name", "");
+        if (!name.empty()) {
+            UserAccount newUser;
+            newUser.phone = phone;
+            newUser.name = name;
+            newUser.password = password;
+            newUser.role = "citizen";
+            newUser.registeredAt = static_cast<long long>(time(nullptr));
+            allUsers.push_back(newUser);
+            saveUsersToFile();
+
+            json resp = {
+                {"success", true},
+                {"user", {
+                    {"phone", newUser.phone},
+                    {"name", newUser.name},
+                    {"role", newUser.role},
+                    {"registeredAt", newUser.registeredAt}
+                }}
+            };
+            res.set_content(resp.dump(2), "application/json");
+            return;
+        }
+
+        res.status = 404;
+        res.set_content(R"({"error":"Account not found. Please click Sign Up to register."})", "application/json");
+    });
+
+    // Registered Citizens Directory (Admin Only)
+    apiServer.Get("/api/users", [](const httplib::Request&, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(dataMutex);
+        json userList = json::array();
+
+        for (const auto& u : allUsers) {
+            if (u.role == "citizen") {
+                int count = 0;
+                for (const auto& c : allComplaints) {
+                    if (c.citizenPhone == u.phone) count++;
+                }
+                userList.push_back({
+                    {"phone", u.phone},
+                    {"name", u.name},
+                    {"registeredAt", u.registeredAt},
+                    {"complaintsCount", count}
+                });
+            }
+        }
+        res.set_content(userList.dump(2), "application/json");
+    });
+
+    // Get complaints - filtered by citizenPhone if provided, or full list for Admin
+    apiServer.Get("/api/complaints", [](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(dataMutex);
+        string phoneFilter = req.has_param("citizenPhone") ? req.get_param_value("citizenPhone") : "";
+        res.set_content(getAllComplaintsJson(phoneFilter).dump(2), "application/json");
+    });
+
+    // Get single complaint by ID using BST search O(log n)
+    apiServer.Get(R"(/api/complaints/(\d+))", [](const httplib::Request& req, httplib::Response& res) {
+        int id = 0;
+        try {
+            id = stoi(req.matches[1].str());
+        } catch (...) {
+            res.status = 400;
+            res.set_content(R"({"error":"Invalid ID format"})", "application/json");
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(dataMutex);
+        int steps = 0;
+        const Complaint* found = idIndex.search(id, steps);
+
+        if (!found) {
+            res.status = 404;
+            res.set_content(R"({"error":"Complaint not found in BST"})", "application/json");
+            return;
+        }
+
+        json data = complaintToJson(*found);
+        data["fdsLookup"] = {
+            {"method", "Binary Search Tree (BST)"},
+            {"comparisons", steps},
+            {"complexity", "O(log N)"}
+        };
+        res.set_content(data.dump(2), "application/json");
+    });
+
+    // Priority Queue: Ranked strictly by Binary Max-Heap (HeapSort O(N log N)) - Admin Only
+    apiServer.Get("/api/priority-queue", [](const httplib::Request&, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(dataMutex);
+        vector<Complaint> ranked = priorityHeap.getPriorityRankedList();
+        json arr = json::array();
+        for (const auto& c : ranked) {
+            arr.push_back(complaintToJson(c));
+        }
+        res.set_content(arr.dump(2), "application/json");
+    });
+
+    // Dashboard metrics
+    apiServer.Get("/api/dashboard", [](const httplib::Request&, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(dataMutex);
+        res.set_content(getDashboardJson().dump(2), "application/json");
+    });
+
+    // Register new complaint (Minimal Step 2, automatic location & priority)
+    apiServer.Post("/api/complaints", [](const httplib::Request& req, httplib::Response& res) {
+        json body;
+        try {
+            body = json::parse(req.body);
+        } catch (...) {
+            res.status = 400;
+            res.set_content(R"({"error":"Invalid JSON payload"})", "application/json");
             return;
         }
 
         Complaint c;
-        c.category = body.value("category", string("Other"));
-        c.type = body.value("type", string("Other"));
-        c.location = body.value("location", string(""));
-        c.description = body.value("description", string(""));
-        c.status = "Submitted";
-        c.safety = body.value("safety", 1);
-        c.severity = body.value("severity", 1);
-        c.people = body.value("people", 1);
-        c.urgent = body.value("urgent", false);
-        c.reportedAt = time(nullptr);
-
-        if (c.location.empty() || c.description.empty() ||
-            c.safety < 1 || c.safety > 5 ||
-            c.severity < 1 || c.severity > 5 ||
-            c.people < 1) {
-            res.status = 400;
-            res.set_content(
-                R"({"error":"Invalid or missing complaint fields"})",
-                "application/json"
-            );
-            return;
+        c.type = body.value("type", string("General Issue"));
+        c.category = body.value("category", string(""));
+        if (c.category.empty()) {
+            if (c.type == "Pothole" || c.type == "Damaged footpath") c.category = "Roads and transport";
+            else if (c.type == "Garbage accumulation") c.category = "Waste management";
+            else if (c.type == "Broken streetlight" || c.type == "Electrical hazard") c.category = "Electricity and lighting";
+            else if (c.type == "Water leakage") c.category = "Water and drainage";
+            else c.category = "Other";
         }
+
+        c.location = body.value("location", string(""));
+        c.latitude = body.value("latitude", 0.0);
+        c.longitude = body.value("longitude", 0.0);
+        if (c.location.empty()) {
+            ostringstream locSs;
+            locSs << fixed << setprecision(4) << "GPS: " << c.latitude << ", " << c.longitude;
+            c.location = locSs.str();
+        }
+
+        c.description = body.value("description", string("Reported via photo geotag"));
+        c.status = "Submitted";
+        c.safety = body.value("safety", (c.type == "Electrical hazard" ? 5 : c.type == "Pothole" ? 4 : 3));
+        c.severity = body.value("severity", 3);
+        c.people = body.value("people", 100);
+        c.urgent = body.value("urgent", false);
+        c.reportedAt = static_cast<long long>(time(nullptr));
+        c.photoUrl = body.value("photoUrl", string(""));
+        c.citizenPhone = body.value("citizenPhone", string(""));
+        c.citizenName = body.value("citizenName", string("Citizen"));
 
         {
             std::lock_guard<std::mutex> lock(dataMutex);
             c.id = nextId++;
-            complaints.push_back(c);
-            saveToFile();
+            allComplaints.push_back(c);
+            idIndex.insert(c);
+            priorityHeap.insert(c);
+            auditTrail.append(c.id, "Registered", "", "Submitted", "Reported by " + c.citizenName, c.citizenPhone);
+            saveComplaintsToFile();
         }
 
         res.status = 201;
         res.set_content(complaintToJson(c).dump(2), "application/json");
     });
-    
-    
-    apiServer.Patch(R"(/api/complaints/(\d+)/status)",
-        [](const httplib::Request& req, httplib::Response& res) {
-            int id = 0;
 
-            try {
-                id = stoi(req.matches[1].str());
-            } catch (...) {
-                res.status = 400;
-                res.set_content(
-                    R"({"error":"Invalid complaint ID"})",
-                    "application/json"
-                );
-                return;
-            }
-
-            json body;
-
-            try {
-                body = json::parse(req.body);
-            } catch (...) {
-                res.status = 400;
-                res.set_content(
-                    R"({"error":"Invalid JSON"})",
-                    "application/json"
-                );
-                return;
-            }
-
-            string status = body.value("status", string(""));
-
-            if (status != "Submitted" &&
-                status != "In Progress" &&
-                status != "Resolved" &&
-                status != "Closed") {
-                res.status = 400;
-                res.set_content(
-                    R"({"error":"Invalid status"})",
-                    "application/json"
-                );
-                return;
-            }
-
-            json result;
-
-            {
-                std::lock_guard<std::mutex> lock(dataMutex);
-                bool found = false;
-
-                for (auto& c : complaints) {
-                    if (c.id == id) {
-                        c.status = status;
-                        result = complaintToJson(c);
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (!found) {
-                    res.status = 404;
-                    res.set_content(
-                        R"({"error":"Complaint not found"})",
-                        "application/json"
-                    );
-                    return;
-                }
-
-                saveToFile();
-            }
-
-            res.set_content(result.dump(2), "application/json");
-        });
-
-
-}
-
-
-
-
-
-
-// ---------- INPUT HELPERS ----------
-
-string readText(const string& prompt) {
-    string value;
-    cout << prompt;
-    getline(cin, value);
-
-    // Keep the | delimiter safe for our storage format.
-    replace(value.begin(), value.end(), '|', '/');
-    return value;
-}
-
-int readInt(const string& prompt, int low, int high) {
-    int value;
-
-    while (true) {
-        cout << prompt;
-
-        if (cin >> value && value >= low && value <= high) {
-            cin.ignore(numeric_limits<streamsize>::max(), '\n');
-            return value;
-        }
-
-        cout << "Enter a valid number from "
-             << low << " to " << high << ".\n";
-
-        cin.clear();
-        cin.ignore(numeric_limits<streamsize>::max(), '\n');
-    }
-}
-
-bool readYesNo(const string& prompt) {
-    while (true) {
-        string answer = readText(prompt);
-
-        if (answer == "y" || answer == "Y" ||
-            answer == "yes" || answer == "YES")
-            return true;
-
-        if (answer == "n" || answer == "N" ||
-            answer == "no" || answer == "NO")
-            return false;
-
-        cout << "Please enter y or n.\n";
-    }
-}
-
-// ---------- PRIORITY ENGINE ----------
-
-
-int waitingDays(const Complaint& c) {
-    if (c.reportedAt <= 0) return 0;
-
-    long long now = static_cast<long long>(time(nullptr));
-    long long elapsed = max(0LL, now - c.reportedAt);
-
-    return static_cast<int>(elapsed / 86400);
-}
-
-int waitingScore(int days) {
-    if (days < 1) return 1;
-    if (days <= 3) return 2;
-    if (days <= 7) return 3;
-    if (days <= 14) return 4;
-    return 5;
-}
-
-int priorityScore(const Complaint& c) {
-    return 8 * c.safety
-         + 6 * c.severity
-         + 4 * affectedScore(c.people)
-         + 2 * waitingScore(waitingDays(c));
-}
-
-string priorityLabel(const Complaint& c) {
-    if (c.urgent) return "URGENT";
-    
-    int score = priorityScore(c);
-
-    if (score >= 80) return "Critical";
-    if (score >= 60) return "High";
-    if (score >= 40) return "Medium";
-    return "Low";
-}
-
-void explainPriority(const Complaint& c) {
-    cout << "\n--- Priority explanation ---\n";
-    cout << "Safety risk: " << c.safety << "/5"
-         << " -> " << 8 * c.safety << " points\n";
-
-    cout << "Issue severity estimate: " << c.severity << "/5"
-         << " -> " << 6 * c.severity << " points\n";
-
-    cout << "Affected population estimate: "
-         << c.people << " people; score "
-         << affectedScore(c.people) << "/5"
-         << " -> " << 4 * affectedScore(c.people)
-         << " points\n";
-
-    cout << "Waiting time: " << waitingDays(c) << " days"
-         << "; score " << waitingScore(waitingDays(c))
-         << "/5 -> " << 2 * waitingScore(waitingDays(c))
-         << " points\n";
-
-    cout << "Numeric priority score: "
-         << priorityScore(c) << "/100\n";
-
-    if (c.urgent) {
-        cout << "Urgent flag: YES. This complaint is flagged "
-                "for immediate attention regardless of its score.\n";
-    } else {
-        cout << "Priority level: " << priorityLabel(c) << '\n';
-    }
-}
-
-// ---------- FILE STORAGE ----------
-
-vector<string> splitLine(const string& line) {
-    vector<string> fields;
-    string field;
-    stringstream ss(line);
-
-    while (getline(ss, field, '|'))
-        fields.push_back(field);
-
-    // Preserve a final empty field if the line ends with |.
-    if (!line.empty() && line.back() == '|')
-        fields.push_back("");
-
-    return fields;
-}
-
-void saveToFile() {
-    ofstream file(FILE_NAME);
-
-    if (!file) {
-        cout << "Error: could not save complaints.\n";
-        return;
-    }
-
-    for (const Complaint& c : complaints) {
-        file << c.id << '|'
-             << c.category << '|'
-             << c.type << '|'
-             << c.location << '|'
-             << c.description << '|'
-             << c.status << '|'
-             << c.safety << '|'
-             << c.severity << '|'
-             << c.people << '|'
-             << c.reportedAt << '|'
-             << c.urgent << '\n';
-    }
-
-    if (!file)
-        cout << "Error occurred while writing complaint data.\n";
-}
-
-void loadFromFile() {
-    ifstream file(FILE_NAME);
-    string line;
-
-    while (getline(file, line)) {
-        if (line.empty()) continue;
-
-        vector<string> f = splitLine(line);
-
+    // Update status (Submitted -> In Progress -> Resolved -> Closed)
+    apiServer.Patch(R"(/api/complaints/(\d+)/status)", [](const httplib::Request& req, httplib::Response& res) {
+        int id = 0;
         try {
-            Complaint c;
-
-            // New format: 11 fields.
-            if (f.size() == 11) {
-                c.id = stoi(f[0]);
-                c.category = f[1];
-                c.type = f[2];
-                c.location = f[3];
-                c.description = f[4];
-                c.status = f[5];
-                c.safety = stoi(f[6]);
-                c.severity = stoi(f[7]);
-                c.people = stoi(f[8]);
-                c.reportedAt = stoll(f[9]);
-                c.urgent = (f[10] == "1");
-            }
-            // Legacy format from the original main.cpp.
-            else if (f.size() == 9) {
-                c.id = stoi(f[0]);
-                c.category = "Other";
-                c.type = f[1];
-                c.location = f[2];
-                c.description = f[3];
-
-                c.status = f[4];
-                if (c.status == "Open")
-                    c.status = "Submitted";
-
-                c.safety = stoi(f[5]);
-                c.severity = stoi(f[6]);
-                c.people = max(0, stoi(f[7]));
-
-                int oldWaitingDays = max(0, stoi(f[8]));
-                c.reportedAt =
-                    static_cast<long long>(time(nullptr))
-                    - static_cast<long long>(oldWaitingDays) * 86400;
-            } else {
-                cout << "Skipped a record with an invalid format.\n";
-                continue;
-            }
-
-            if (c.id <= 0 || c.safety < 1 || c.safety > 5 ||
-                c.severity < 1 || c.severity > 5 ||
-                c.people < 0 || c.status.empty()) {
-                cout << "Skipped an invalid complaint record.\n";
-                continue;
-            }
-
-            auto duplicate = find_if(
-                complaints.begin(), complaints.end(),
-                [&](const Complaint& existing) {
-                    return existing.id == c.id;
-                });
-
-            if (duplicate != complaints.end())
-                continue;
-
-            complaints.push_back(c);
-            nextId = max(nextId, c.id + 1);
+            id = stoi(req.matches[1].str());
         } catch (...) {
-            cout << "Skipped a complaint record with invalid data.\n";
-        }
-    }
-}
-
-// ---------- COMPLAINT REGISTRATION ----------
-
-void addComplaint() {
-    Complaint c;
-
-    cout << "\n--- Register civic complaint ---\n";
-
-    cout << "Categories:\n"
-         << "1. Roads and transport\n"
-         << "2. Waste management\n"
-         << "3. Electricity and lighting\n"
-         << "4. Water and drainage\n"
-         << "5. Public spaces\n"
-         << "6. Environment and hazards\n"
-         << "7. Other\n";
-
-    int choice = readInt("Choose category (1-7): ", 1, 7);
-
-    const vector<string> categories = {
-        "Roads and transport",
-        "Waste management",
-        "Electricity and lighting",
-        "Water and drainage",
-        "Public spaces",
-        "Environment and hazards",
-        "Other"
-    };
-
-    c.category = categories[choice - 1];
-    c.type = readText("Issue type (e.g. pothole, overflowing bin): ");
-    c.location = readText("Location / area: ");
-    c.description = readText("Describe the problem: ");
-
-    cout << "\nLocation/activity context:\n"
-         << "1. Quiet or low-traffic area\n"
-         << "2. Residential street\n"
-         << "3. Busy public area\n"
-         << "4. School, hospital, or busy road\n"
-         << "5. Major public area affecting many people\n";
-
-    int context = readInt("Choose context (1-5): ", 1, 5);
-
-    // These are estimates from context, not verified headcounts.
-    const int estimatedPeople[] = {5, 20, 50, 200, 201};
-    c.people = estimatedPeople[context - 1];
-
-    bool danger = readYesNo(
-        "Is there an immediate safety danger to people? (y/n): ");
-
-    c.safety = danger ? 5 : 2;
-
-    // Transparent default severity estimate by category.
-    const int severityEstimates[] = {4, 3, 3, 4, 2, 4, 2};
-    c.severity = severityEstimates[choice - 1];
-
-    c.urgent = readYesNo(
-        "Flag this complaint for immediate attention? (y/n): ");
-
-    c.id = nextId++;
-    c.status = "Submitted";
-    c.reportedAt = static_cast<long long>(time(nullptr));
-
-    complaints.push_back(c);
-    saveToFile();
-
-    cout << "\nComplaint registered successfully!\n";
-    cout << "Complaint ID: " << c.id << '\n';
-    cout << "Category: " << c.category << '\n';
-    explainPriority(c);
-}
-
-// ---------- DISPLAY AND SEARCH ----------
-
-void displayOne(const Complaint& c) {
-    cout << "\n----------------------------------\n";
-    cout << "ID: " << c.id
-         << "\nCategory: " << c.category
-         << "\nIssue: " << c.type
-         << "\nLocation: " << c.location
-         << "\nDescription: " << c.description
-         << "\nStatus: " << c.status
-         << "\nPriority: " << priorityLabel(c)
-         << "\nScore: " << priorityScore(c) << "/100\n";
-
-    explainPriority(c);
-}
-
-void displayComplaints() {
-    if (complaints.empty()) {
-        cout << "No complaints found.\n";
-        return;
-    }
-
-    for (const Complaint& c : complaints)
-        displayOne(c);
-}
-
-void searchComplaint() {
-    int id = readInt("Enter complaint ID: ", 1,
-                     numeric_limits<int>::max());
-
-    // Linear search: O(n).
-    for (const Complaint& c : complaints) {
-        if (c.id == id) {
-            displayOne(c);
+            res.status = 400;
+            res.set_content(R"({"error":"Invalid complaint ID"})", "application/json");
             return;
         }
-    }
 
-    cout << "Complaint not found.\n";
-}
+        json body;
+        try {
+            body = json::parse(req.body);
+        } catch (...) {
+            res.status = 400;
+            res.set_content(R"({"error":"Invalid JSON payload"})", "application/json");
+            return;
+        }
 
-void rankComplaints() {
-    if (complaints.empty()) {
-        cout << "No complaints to rank.\n";
-        return;
-    }
+        string newStatus = body.value("status", string(""));
+        string notes = body.contains("notes") ? body.value("notes", string("")) : body.value("resolutionNotes", string(""));
+        string officer = body.contains("officer") ? body.value("officer", string("Municipal Official")) : body.value("assignedTo", string("Municipal Official"));
 
-    vector<Complaint> ranked = complaints;
+        if (newStatus != "Submitted" && newStatus != "In Progress" &&
+            newStatus != "Resolved" && newStatus != "Closed") {
+            res.status = 400;
+            res.set_content(R"({"error":"Invalid status"})", "application/json");
+            return;
+        }
 
-    // Urgent complaints first; then numeric score descending.
-    stable_sort(ranked.begin(), ranked.end(),
-        [](const Complaint& a, const Complaint& b) {
-            if (a.urgent != b.urgent)
-                return a.urgent > b.urgent;
+        json resultJson;
+        {
+            std::lock_guard<std::mutex> lock(dataMutex);
+            bool found = false;
 
-            return priorityScore(a) > priorityScore(b);
-        });
+            for (auto& c : allComplaints) {
+                if (c.id == id) {
+                    string prevStatus = c.status;
+                    c.status = newStatus;
 
-    cout << "\n--- Complaints ranked by priority ---\n";
+                    if (!notes.empty()) c.resolutionNotes = notes;
+                    if (!officer.empty()) c.assignedTo = officer;
+                    if (newStatus == "Resolved" || newStatus == "Closed") {
+                        c.resolvedAt = static_cast<long long>(time(nullptr));
+                    }
 
-    for (const Complaint& c : ranked) {
-        cout << "\nID: " << c.id
-             << " | " << c.category
-             << " | " << c.type
-             << " | Score: " << priorityScore(c) << "/100"
-             << " | Priority: " << priorityLabel(c)
-             << " | Status: " << c.status << '\n';
-    }
-}
+                    auditTrail.append(c.id, "Status Transition", prevStatus, newStatus, notes, officer);
+                    syncDataStructures();
+                    saveComplaintsToFile();
 
-// ---------- STATUS MANAGEMENT ----------
+                    resultJson = complaintToJson(c);
+                    found = true;
+                    break;
+                }
+            }
 
-void updateStatus() {
-    int id = readInt("Enter complaint ID: ", 1,
-                     numeric_limits<int>::max());
+            if (!found) {
+                res.status = 404;
+                res.set_content(R"({"error":"Complaint not found"})", "application/json");
+                return;
+            }
+        }
 
-    for (Complaint& c : complaints) {
-        if (c.id != id) continue;
+        res.set_content(resultJson.dump(2), "application/json");
+    });
 
-        cout << "Current status: " << c.status << '\n'
-             << "1. Submitted\n"
-             << "2. In Progress\n"
-             << "3. Resolved\n"
-             << "4. Closed\n";
+    // Dijkstra dispatch route
+    apiServer.Get("/api/dispatch-route", [](const httplib::Request&, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(dataMutex);
 
-        int choice = readInt("Choose new status (1-4): ", 1, 4);
+        vector<int> targetNodes;
+        vector<Complaint> topComplaints = priorityHeap.getPriorityRankedList();
 
-        const vector<string> statuses = {
-            "Submitted", "In Progress", "Resolved", "Closed"
+        for (const auto& c : topComplaints) {
+            if (c.status != "Resolved" && c.status != "Closed") {
+                int node = -1;
+                if (c.latitude != 0.0 && c.longitude != 0.0) {
+                    node = cityGraph.findNearestNode(c.latitude, c.longitude);
+                } else {
+                    node = cityGraph.findNodeByLocation(c.location);
+                }
+                if (node >= 0 && std::find(targetNodes.begin(), targetNodes.end(), node) == targetNodes.end()) {
+                    targetNodes.push_back(node);
+                }
+                if (targetNodes.size() >= 5) break;
+            }
+        }
+
+        CivicGraph::RouteResult route = cityGraph.calculateDispatchRoute(0, targetNodes);
+
+        json response = {
+            {"algorithm", "Dijkstra's Shortest Path & Multi-Stop Dispatch"},
+            {"hub", "Municipal Central Depot"},
+            {"waypoints", route.pathNodeNames},
+            {"totalDistanceKm", std::round(route.totalDistanceKm * 100.0) / 100.0},
+            {"estimatedMinutes", route.estimatedMinutes},
+            {"stopsCount", targetNodes.size()}
         };
 
-        c.status = statuses[choice - 1];
-        saveToFile();
+        res.set_content(response.dump(2), "application/json");
+    });
 
-        cout << "Status updated to " << c.status << ".\n";
-        return;
-    }
+    // FDS Live Metrics
+    apiServer.Get("/api/fds-metrics", [](const httplib::Request&, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(dataMutex);
 
-    cout << "Complaint not found.\n";
+        size_t heapCount = priorityHeap.size();
+        int heapDepth = heapCount > 0 ? static_cast<int>(std::floor(std::log2(heapCount))) + 1 : 0;
+        int bstHeight = idIndex.height();
+        size_t bstCount = idIndex.size();
+
+        json metrics = {
+            {"project", "CivicPulse - Fundamentals of Data Structures Implementation"},
+            {"maxHeap", {
+                {"name", "Binary Max-Heap Priority Queue"},
+                {"elements", heapCount},
+                {"treeDepth", heapDepth},
+                {"insertionComplexity", "O(log N)"},
+                {"peekMaxComplexity", "O(1)"},
+                {"extractMaxComplexity", "O(log N)"}
+            }},
+            {"bst", {
+                {"name", "Binary Search Tree (ID Index)"},
+                {"elements", bstCount},
+                {"treeHeight", bstHeight},
+                {"searchComplexity", "O(log N) average"},
+                {"traversal", "In-Order"}
+            }},
+            {"graph", {
+                {"name", "Adjacency-List Weighted Civic Graph"},
+                {"vertexCount", cityGraph.getVertexCount()},
+                {"edgeCount", cityGraph.getEdgeCount()},
+                {"routingAlgorithm", "Dijkstra's Shortest Path"},
+                {"complexity", "O((V + E) log V)"}
+            }},
+            {"doublyLinkedList", {
+                {"name", "Doubly Linked List (Audit Log)"},
+                {"recordsCount", auditTrail.size()},
+                {"timeComplexityAppend", "O(1)"},
+                {"bidirectionalTraversal", true}
+            }}
+        };
+
+        res.set_content(metrics.dump(2), "application/json");
+    });
+
+    // Audit log
+    apiServer.Get("/api/audit-log", [](const httplib::Request&, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(dataMutex);
+        auto logs = auditTrail.getReverseChronologicalLog();
+        json result = json::array();
+        for (const auto& item : logs) {
+            result.push_back({
+                {"complaintId", item.complaintId},
+                {"action", item.action},
+                {"previousStatus", item.previousStatus},
+                {"newStatus", item.newStatus},
+                {"notes", item.notes},
+                {"officer", item.officer},
+                {"timestamp", item.timestamp}
+            });
+        }
+        res.set_content(result.dump(2), "application/json");
+    });
+
+    // Static file serving: HTML, JS, CSS, PWA Manifest, Service Worker
+    auto serveFile = [](const string& path, const string& mime, httplib::Response& res) {
+        ifstream file(path, ios::binary);
+        if (!file) {
+            res.status = 404;
+            res.set_content("File not found: " + path, "text/plain");
+            return;
+        }
+        string content((istreambuf_iterator<char>(file)), istreambuf_iterator<char>());
+        res.set_content(content, mime);
+    };
+
+    apiServer.Get("/", [serveFile](const httplib::Request&, httplib::Response& res) {
+        serveFile("../index.html", "text/html", res);
+    });
+
+    apiServer.Get("/script.js", [serveFile](const httplib::Request&, httplib::Response& res) {
+        serveFile("../script.js", "application/javascript", res);
+    });
+
+    apiServer.Get("/style.css", [serveFile](const httplib::Request&, httplib::Response& res) {
+        serveFile("../style.css", "text/css", res);
+    });
+
+    apiServer.Get("/manifest.json", [serveFile](const httplib::Request&, httplib::Response& res) {
+        serveFile("../manifest.json", "application/manifest+json", res);
+    });
+
+    apiServer.Get("/sw.js", [serveFile](const httplib::Request&, httplib::Response& res) {
+        serveFile("../sw.js", "application/javascript", res);
+    });
 }
 
-// ---------- DASHBOARD ----------
-
-void showDashboard() {
-    int total = static_cast<int>(complaints.size());
-    int open = 0, high = 0, resolved = 0;
-
-    for (const Complaint& c : complaints) {
-        if (c.status == "Submitted" || c.status == "In Progress")
-            open++;
-
-        if (c.status == "Resolved" || c.status == "Closed")
-            resolved++;
-
-        if (c.urgent || priorityScore(c) >= 60)
-            high++;
-    }
-
-    cout << "\n========== CIVICPULSE DASHBOARD ==========\n";
-    cout << "Total complaints: " << total << '\n';
-    cout << "Open complaints: " << open << '\n';
-    cout << "High-priority / urgent complaints: " << high << '\n';
-    cout << "Resolved or closed complaints: " << resolved << '\n';
-    cout << "==========================================\n";
-}
-
-// ---------- MAIN MENU ----------
-
+// ---------- MAIN ----------
 
 int main() {
-    loadFromFile();
-
+    loadUsersFromFile();
+    loadComplaintsFromFile();
     setupApiRoutes();
 
-    apiServer.Get("/", [](const httplib::Request& req,
-                          httplib::Response& res) {
-        ifstream file("../index.html");
-        if (!file) {
-            res.status = 404;
-            res.set_content("index.html not found", "text/plain");
-            return;
-        }
-
-        string content((istreambuf_iterator<char>(file)),
-                       istreambuf_iterator<char>());
-        res.set_content(content, "text/html");
-    });
-
-    apiServer.Get("/script.js", [](const httplib::Request& req,
-                                   httplib::Response& res) {
-        ifstream file("../script.js");
-        if (!file) {
-            res.status = 404;
-            res.set_content("script.js not found", "text/plain");
-            return;
-        }
-
-        string content((istreambuf_iterator<char>(file)),
-                       istreambuf_iterator<char>());
-        res.set_content(content, "application/javascript");
-    });
-
-    apiServer.Get("/style.css", [](const httplib::Request& req,
-                                   httplib::Response& res) {
-        ifstream file("../style.css");
-        if (!file) {
-            res.status = 404;
-            res.set_content("style.css not found", "text/plain");
-            return;
-        }
-
-        string content((istreambuf_iterator<char>(file)),
-                       istreambuf_iterator<char>());
-        res.set_content(content, "text/css");
-    });
-
-    if (!apiServer.bind_to_port("127.0.0.1", 8080)) {
-        cerr << "Could not start CivicPulse API on port 8080.\n";
+    if (!apiServer.bind_to_port("0.0.0.0", 8080)) {
+        cerr << "[CivicPulse Error] Could not bind to 0.0.0.0:8080.\n";
         return 1;
     }
 
+    serverRunning = true;
     thread serverThread([]() {
-        cout << "CivicPulse API running at http://127.0.0.1:8080\n";
+        cout << "\n=======================================================\n"
+             << "  * CivicPulse Real-Life Multi-User Engine ACTIVE\n"
+             << "  * Local Access:   http://127.0.0.1:8080\n"
+             << "  * Phone Access:   http://192.168.0.102:8080\n"
+             << "=======================================================\n";
         apiServer.listen_after_bind();
     });
 
-    int choice;
-
-    do {
-        cout << "\n========== CIVICPULSE ==========\n"
-             << "1. Register complaint\n"
-             << "2. View all complaints\n"
-             << "3. Search complaint by ID\n"
-             << "4. Rank complaints by priority\n"
-             << "5. Update complaint status\n"
-             << "6. Dashboard\n"
-             << "7. Save data\n"
-             << "8. Exit\n";
-
-        choice = readInt("Enter choice (1-8): ", 1, 8);
-
-        switch (choice) {
-            case 1: addComplaint(); break;
-            case 2: displayComplaints(); break;
-            case 3: searchComplaint(); break;
-            case 4: rankComplaints(); break;
-            case 5: updateStatus(); break;
-            case 6: showDashboard(); break;
-            case 7:
-                saveToFile();
-                cout << "Data saved.\n";
-                break;
-            case 8:
-                saveToFile();
-                cout << "Data saved. Goodbye!\n";
-                break;
-        }
-    } while (choice != 8);
+    cout << "\n[CivicPulse Server Running] Press Enter to exit server.\n";
+    string line;
+    getline(cin, line);
 
     apiServer.stop();
-
     if (serverThread.joinable()) {
         serverThread.join();
     }

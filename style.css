@@ -1110,6 +1110,252 @@ footer {
   text-align: center;
 }
 
+/* ---------- AUTH ERROR MESSAGE ---------- */
+
+.auth-error-msg {
+  background: #fdf2f2;
+  border: 1px solid #f8b4b4;
+  color: #9b1c1c;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 14px;
+  animation: shake 0.3s ease;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-4px); }
+  40%, 80% { transform: translateX(4px); }
+}
+
+/* ---------- CLICKABLE PHOTOS & ZOOM BADGES ---------- */
+
+.clickable-photo {
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.clickable-photo:hover {
+  transform: scale(1.03);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+}
+
+.thumbnail-wrapper {
+  position: relative;
+  display: inline-block;
+  cursor: pointer;
+}
+
+.zoom-badge {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  font-size: 10px;
+  text-align: center;
+  border-radius: 4px;
+  padding: 2px 4px;
+  pointer-events: none;
+}
+
+.tap-hint {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  background: rgba(0,0,0,0.65);
+  color: white;
+  font-size: 10px;
+  border-radius: 4px;
+  padding: 2px 6px;
+  pointer-events: none;
+}
+
+/* ---------- IMAGE LIGHTBOX MODAL ---------- */
+
+.lightbox-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.88);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3000;
+  animation: fadeIn 0.2s ease;
+  padding: 20px;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.lightbox-content {
+  position: relative;
+  max-width: 92vw;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.lightbox-content img {
+  max-width: 90vw;
+  max-height: 78vh;
+  border-radius: 8px;
+  object-fit: contain;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  border: 2px solid rgba(255, 255, 255, 0.2);
+}
+
+.lightbox-close {
+  position: absolute;
+  top: -44px;
+  right: 0;
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: none;
+  font-size: 28px;
+  line-height: 1;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease;
+}
+
+.lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.lightbox-caption {
+  color: white;
+  font-size: 14px;
+  font-weight: 500;
+  margin-top: 12px;
+  text-align: center;
+}
+
+.lightbox-actions {
+  margin-top: 10px;
+}
+
+/* ---------- ACTION BUTTONS GROUP ---------- */
+
+.action-btn-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.action-btn-resolve {
+  background: #17613a !important;
+  color: white !important;
+}
+
+.action-btn-resolve:hover {
+  background: #114c2c !important;
+}
+
+.action-btn-update {
+  background: #f0f4f1 !important;
+  color: #172b22 !important;
+  border: 1px solid #c2d6c6 !important;
+}
+
+.action-btn-update:hover {
+  background: #e1ede3 !important;
+}
+
+.action-btn-map {
+  background: #582c8b !important;
+  color: white !important;
+}
+
+.action-btn-map:hover {
+  background: #452170 !important;
+}
+
+.action-btn-danger {
+  background: #fdf2f2 !important;
+  color: #c81e1e !important;
+  border: 1px solid #f8b4b4 !important;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.action-btn-danger:hover {
+  background: #e02424 !important;
+  color: white !important;
+}
+
+.citizen-card-actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid #edf2ee;
+  padding-top: 10px;
+}
+
+.map-link-btn {
+  color: #17613a;
+  text-decoration: none;
+  font-weight: 600;
+  display: inline-block;
+}
+
+.map-link-btn:hover {
+  text-decoration: underline;
+}
+
+/* ---------- MAP ROUTE BANNER ---------- */
+
+.map-route-card {
+  margin-bottom: 14px;
+  border-left: 4px solid var(--green);
+  background: #f4faf5;
+}
+
+.map-route-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.close-route-btn {
+  background: transparent;
+  border: 1px solid #cbdcd0;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.close-route-btn:hover {
+  background: #e2ede5;
+  color: var(--text);
+}
+
+.map-route-details {
+  font-size: 13px;
+  color: #2b4034;
+  line-height: 1.6;
+}
+
 /* ---------- RESPONSIVE DESIGN FOR SMARTPHONES ---------- */
 
 @media (max-width: 1024px) {
@@ -1133,4 +1379,33 @@ footer {
   #toast { bottom: 70px; right: 14px; left: 14px; text-align: center; }
   .auth-card { padding: 24px 18px; }
   .phone-connect-flex { flex-direction: column; text-align: center; }
+}
+
+.rank-badge {
+  display: inline-block;
+  background: #eef4f0;
+  color: var(--green);
+  font-weight: 700;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  border: 1px solid #c7dcd0;
+}
+
+.ai-reason-cell {
+  max-width: 260px;
+  white-space: normal;
+  line-height: 1.4;
+}
+
+.ai-source-badge {
+  display: inline-block;
+  background: #f0f7f3;
+  color: #2e6945;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-top: 4px;
+  border: 1px solid #d4e7db;
 }

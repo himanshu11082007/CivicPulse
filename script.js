@@ -1,9 +1,10 @@
 /**
  * CivicPulse - Real-Life Multi-Tenant Civic Resolution App
- * Fully Interactive Authentication, Photo Geotagging, and C++ FDS Engine
+ * Interactive Geotagging, Mobile Camera, Dynamic Map Routing, and Admin Fleet Engine
  */
 
 let allIssues = [];
+let heapPriorityIssues = [];
 let citizenIssues = [];
 let registeredCitizens = [];
 let currentSession = null; // { phone, name, role }
@@ -13,6 +14,7 @@ let fullMapInstance = null;
 let routePolyline = null;
 let cameraStream = null;
 let deferredPrompt = null;
+let autoRefreshTimer = null;
 
 const DEPOT_COORDS = [18.5204, 73.8567];
 
@@ -22,10 +24,69 @@ document.addEventListener("DOMContentLoaded", () => {
   setupDragAndDrop();
   registerServiceWorker();
   initPwaInstall();
+  loadNetworkInfo();
+  setupAuthInputListeners();
   checkExistingSession();
+
+  // Background auto-refresh every 8 seconds
+  if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+  autoRefreshTimer = setInterval(() => {
+    if (!document.hidden && currentSession) {
+      refreshData(true);
+    }
+  }, 8000);
 });
 
-// Check if user already logged in
+// Fetch dynamic local IP and update QR code
+async function loadNetworkInfo() {
+  try {
+    const res = await fetch("/api/network-info");
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.url) {
+      const qrEl = document.getElementById("phoneQrCode");
+      if (qrEl) {
+        qrEl.src = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(data.url)}`;
+      }
+      const netLink = document.getElementById("networkLinkDisplay");
+      if (netLink) {
+        netLink.textContent = data.url;
+      }
+    }
+  } catch (e) {
+    console.debug("Network info fetch:", e);
+  }
+}
+
+// Clear auth validation errors when user types
+function setupAuthInputListeners() {
+  const inputs = document.querySelectorAll(".auth-form input");
+  inputs.forEach(input => {
+    input.addEventListener("input", () => {
+      clearAllAuthErrors();
+    });
+  });
+}
+
+function setAuthError(containerId, message) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  if (message) {
+    el.textContent = message;
+    el.classList.remove("hidden");
+  } else {
+    el.textContent = "";
+    el.classList.add("hidden");
+  }
+}
+
+function clearAllAuthErrors() {
+  setAuthError("citizenLoginError", null);
+  setAuthError("citizenSignupError", null);
+  setAuthError("adminLoginError", null);
+}
+
+// Check existing session
 function checkExistingSession() {
   const saved = localStorage.getItem("civicpulse_session");
   if (saved) {
@@ -96,9 +157,10 @@ function updateUserInterface() {
   }
 }
 
-// ---------- AUTHENTICATION LOGIC ----------
+// ---------- AUTHENTICATION LOGIC & VALIDATIONS ----------
 
 function switchAuthTab(tab) {
+  clearAllAuthErrors();
   document.querySelectorAll(".auth-tab-btn").forEach(b => b.classList.remove("active"));
   document.getElementById("citizenLoginForm")?.classList.add("hidden");
   document.getElementById("citizenSignupForm")?.classList.add("hidden");
@@ -118,8 +180,29 @@ function switchAuthTab(tab) {
 
 async function handleCitizenLogin(e) {
   e.preventDefault();
-  const phone = document.getElementById("loginPhone").value.trim();
-  const password = document.getElementById("loginPassword").value.trim();
+  clearAllAuthErrors();
+
+  const phoneInput = document.getElementById("loginPhone");
+  const passInput = document.getElementById("loginPassword");
+  const phone = (phoneInput?.value || "").trim();
+  const password = (passInput?.value || "").trim();
+
+  // Strict Validations
+  if (!phone) {
+    setAuthError("citizenLoginError", "⚠️ Please enter your 10-digit mobile number.");
+    phoneInput?.focus();
+    return;
+  }
+  if (!/^[0-9]{10}$/.test(phone)) {
+    setAuthError("citizenLoginError", "⚠️ Please enter a valid 10-digit mobile number (digits only).");
+    phoneInput?.focus();
+    return;
+  }
+  if (!password) {
+    setAuthError("citizenLoginError", "⚠️ Please enter your password.");
+    passInput?.focus();
+    return;
+  }
 
   try {
     const res = await fetch("/api/auth/login", {
@@ -130,7 +213,9 @@ async function handleCitizenLogin(e) {
 
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data.error || "Login failed");
+      setAuthError("citizenLoginError", data.error || "Login failed.");
+      showToast(data.error || "Login failed");
+      return;
     }
 
     currentSession = data.user;
@@ -138,15 +223,56 @@ async function handleCitizenLogin(e) {
     showToast(`Welcome back, ${currentSession.name}!`);
     enterAppScreen();
   } catch (err) {
-    showToast(err.message || "Login error. Please check your credentials.");
+    setAuthError("citizenLoginError", "Server connection error. Please make sure the CivicPulse server is running.");
+    showToast("Connection error");
   }
 }
 
 async function handleCitizenSignup(e) {
   e.preventDefault();
-  const name = document.getElementById("signupName").value.trim();
-  const phone = document.getElementById("signupPhone").value.trim();
-  const password = document.getElementById("signupPassword").value.trim();
+  clearAllAuthErrors();
+
+  const nameInput = document.getElementById("signupName");
+  const phoneInput = document.getElementById("signupPhone");
+  const passInput = document.getElementById("signupPassword");
+  const confirmPassInput = document.getElementById("signupConfirmPassword");
+
+  const name = (nameInput?.value || "").trim();
+  const phone = (phoneInput?.value || "").trim();
+  const password = (passInput?.value || "").trim();
+  const confirmPassword = (confirmPassInput?.value || "").trim();
+
+  // Strict Validations
+  if (!name || name.length < 2) {
+    setAuthError("citizenSignupError", "⚠️ Please enter your full name.");
+    nameInput?.focus();
+    return;
+  }
+  if (!phone) {
+    setAuthError("citizenSignupError", "⚠️ Please enter your 10-digit mobile number.");
+    phoneInput?.focus();
+    return;
+  }
+  if (!/^[0-9]{10}$/.test(phone)) {
+    setAuthError("citizenSignupError", "⚠️ Please enter a valid 10-digit mobile number (e.g. 9876543210).");
+    phoneInput?.focus();
+    return;
+  }
+  if (!password) {
+    setAuthError("citizenSignupError", "⚠️ Please enter a password.");
+    passInput?.focus();
+    return;
+  }
+  if (password.length < 4) {
+    setAuthError("citizenSignupError", "⚠️ Password must be at least 4 characters long.");
+    passInput?.focus();
+    return;
+  }
+  if (password !== confirmPassword) {
+    setAuthError("citizenSignupError", "⚠️ Passwords do not match. Please re-enter.");
+    confirmPassInput?.focus();
+    return;
+  }
 
   try {
     const res = await fetch("/api/auth/register", {
@@ -157,7 +283,9 @@ async function handleCitizenSignup(e) {
 
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data.error || "Sign-up failed");
+      setAuthError("citizenSignupError", data.error || "Sign-up failed.");
+      showToast(data.error || "Sign-up failed");
+      return;
     }
 
     currentSession = data.user;
@@ -165,14 +293,31 @@ async function handleCitizenSignup(e) {
     showToast(`Account created successfully! Welcome, ${currentSession.name}.`);
     enterAppScreen();
   } catch (err) {
-    showToast(err.message || "Sign-up error. Phone may already be registered.");
+    setAuthError("citizenSignupError", "Server connection error. Please make sure the CivicPulse server is running.");
+    showToast("Connection error");
   }
 }
 
 async function handleAdminLogin(e) {
   e.preventDefault();
-  const username = document.getElementById("adminUsername").value.trim();
-  const password = document.getElementById("adminPassword").value.trim();
+  clearAllAuthErrors();
+
+  const userInput = document.getElementById("adminUsername");
+  const passInput = document.getElementById("adminPassword");
+  const username = (userInput?.value || "").trim();
+  const password = (passInput?.value || "").trim();
+
+  // Strict Validations
+  if (!username) {
+    setAuthError("adminLoginError", "⚠️ Please enter administrator username.");
+    userInput?.focus();
+    return;
+  }
+  if (!password) {
+    setAuthError("adminLoginError", "⚠️ Please enter administrator security password / PIN.");
+    passInput?.focus();
+    return;
+  }
 
   try {
     const res = await fetch("/api/auth/login", {
@@ -183,7 +328,9 @@ async function handleAdminLogin(e) {
 
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data.error || "Invalid admin credentials");
+      setAuthError("adminLoginError", data.error || "Invalid administrator credentials.");
+      showToast(data.error || "Invalid Admin login");
+      return;
     }
 
     currentSession = data.user;
@@ -191,7 +338,8 @@ async function handleAdminLogin(e) {
     showToast("🛡 Authorized: Entered Municipal Officer Workspace");
     enterAppScreen();
   } catch (err) {
-    showToast(err.message || "Invalid Admin login");
+    setAuthError("adminLoginError", "Server connection error. Please verify the CivicPulse server is running.");
+    showToast("Connection error");
   }
 }
 
@@ -204,17 +352,22 @@ function logout() {
 
 // ---------- FETCH & REFRESH DATA ----------
 
-async function refreshData() {
+async function refreshData(silent = false) {
   if (!currentSession) return;
 
   if (currentSession.role === "citizen") {
     await loadCitizenIssues();
     renderCitizenComplaints();
   } else {
-    await loadAdminAllIssues();
-    await loadRegisteredCitizens();
+    await Promise.all([
+      loadAdminAllIssues(),
+      loadPriorityQueue(),
+      loadRegisteredCitizens()
+    ]);
     renderAdminViews();
-    setTimeout(() => initLeafletMaps(), 200);
+    if (!silent) {
+      setTimeout(() => initLeafletMaps(), 200);
+    }
   }
 }
 
@@ -242,6 +395,18 @@ async function loadAdminAllIssues() {
   }
 }
 
+async function loadPriorityQueue() {
+  try {
+    const res = await fetch("/api/priority-queue");
+    if (!res.ok) throw new Error("HTTP error " + res.status);
+    const data = await res.json();
+    heapPriorityIssues = data.map(formatComplaintObject);
+  } catch (err) {
+    console.debug("Fetch priority queue error:", err);
+    heapPriorityIssues = [];
+  }
+}
+
 async function loadRegisteredCitizens() {
   try {
     const res = await fetch("/api/users");
@@ -260,13 +425,15 @@ function formatComplaintObject(c) {
     category: c.category,
     type: c.type,
     location: c.location,
-    description: c.description,
+    description: c.description || "",
     status: c.status,
     safety: c.safety,
     condition: c.severity,
     people: c.people,
-    date: new Date(c.reportedAt * 1000).toISOString(),
+    date: new Date((c.reportedAt || 0) * 1000).toISOString(),
     urgent: c.urgent,
+    locationSensitivity: c.locationSensitivity || 1,
+    emergencyOverride: c.emergencyOverride || false,
     latitude: c.latitude || 18.5204,
     longitude: c.longitude || 73.8567,
     photoUrl: c.photoUrl,
@@ -276,11 +443,13 @@ function formatComplaintObject(c) {
     citizenPhone: c.citizenPhone || "",
     citizenName: c.citizenName || "Citizen",
     backendPriority: c.priority,
-    backendPriorityScore: c.priorityScore
+    backendPriorityScore: c.priorityScore,
+    aiReason: c.aiReason || "",
+    aiSource: c.aiSource || ""
   };
 }
 
-// ---------- PHOTO CAPTURE & AUTOMATIC GEOTAG (COMPULSORY STEP 1) ----------
+// ---------- PHOTO CAPTURE & AUTOMATIC GEOTAG ----------
 
 function setupDragAndDrop() {
   const dropzone = document.getElementById("dropzone");
@@ -308,9 +477,37 @@ function setupDragAndDrop() {
 }
 
 function handleFileSelect(event) {
-  if (event.target.files.length) {
+  if (event.target.files && event.target.files.length) {
     processSelectedFile(event.target.files[0]);
   }
+}
+
+// Compress image on client side using Canvas (keeps max 1280px, ~120KB JPEG)
+function compressImage(file, maxWidth = 1280, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = e => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+        if (width > maxWidth) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 async function processSelectedFile(file) {
@@ -319,11 +516,10 @@ async function processSelectedFile(file) {
     return;
   }
 
-  showToast("Reading photo metadata & GPS...");
+  showToast("Processing photo & locking GPS coordinates...");
 
-  const reader = new FileReader();
-  reader.onload = async e => {
-    const dataUrl = e.target.result;
+  try {
+    const dataUrl = await compressImage(file, 1280, 0.82);
     document.getElementById("previewImg").src = dataUrl;
     document.getElementById("photoUrl").value = dataUrl;
 
@@ -332,12 +528,11 @@ async function processSelectedFile(file) {
     let lng = coords ? coords.longitude : null;
 
     if (!lat || !lng) {
-      // Query device GPS via HTML5
       if ("geolocation" in navigator) {
         navigator.geolocation.getCurrentPosition(
           pos => applyExtractedGeotag(pos.coords.latitude, pos.coords.longitude, dataUrl),
           () => applyExtractedGeotag(18.5280, 73.8570, dataUrl),
-          { timeout: 3500 }
+          { timeout: 4000 }
         );
       } else {
         applyExtractedGeotag(18.5280, 73.8570, dataUrl);
@@ -345,8 +540,18 @@ async function processSelectedFile(file) {
     } else {
       applyExtractedGeotag(lat, lng, dataUrl);
     }
-  };
-  reader.readAsDataURL(file);
+  } catch (err) {
+    console.error("Photo process note:", err);
+    // Fallback to direct read
+    const reader = new FileReader();
+    reader.onload = e => {
+      const dataUrl = e.target.result;
+      document.getElementById("previewImg").src = dataUrl;
+      document.getElementById("photoUrl").value = dataUrl;
+      applyExtractedGeotag(18.5280, 73.8570, dataUrl);
+    };
+    reader.readAsDataURL(file);
+  }
 }
 
 // Binary EXIF GPS Parser
@@ -433,16 +638,29 @@ async function extractExifGps(file) {
   return null;
 }
 
-// Camera controls
+// Camera controls - Seamless mobile fallback for HTTP LAN
 async function toggleCamera() {
+  const isSecure = (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1");
+  const hasGetUserMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+
+  // If on mobile via plain HTTP (e.g. http://192.168.x.x), modern mobile browsers block getUserMedia.
+  // HTML5 capture="environment" opens native phone camera directly and seamlessly!
+  if (!isSecure || !hasGetUserMedia) {
+    const nativeCam = document.getElementById("nativeCameraInput");
+    if (nativeCam) {
+      nativeCam.click();
+      return;
+    }
+  }
+
   const video = document.getElementById("cameraVideo");
   const snapBtn = document.getElementById("snapBtn");
 
   if (cameraStream) {
     cameraStream.getTracks().forEach(t => t.stop());
     cameraStream = null;
-    video.style.display = "none";
-    snapBtn.style.display = "none";
+    if (video) video.style.display = "none";
+    if (snapBtn) snapBtn.style.display = "none";
     return;
   }
 
@@ -451,13 +669,20 @@ async function toggleCamera() {
       video: { facingMode: "environment" },
       audio: false
     });
-    video.srcObject = cameraStream;
-    video.style.display = "block";
-    snapBtn.style.display = "block";
+    if (video) {
+      video.srcObject = cameraStream;
+      video.style.display = "block";
+    }
+    if (snapBtn) snapBtn.style.display = "block";
     showToast("Camera active. Capture photo of the civic issue.");
   } catch (err) {
-    console.error("Camera access error:", err);
-    showToast("Camera access unavailable. Please use file upload.");
+    console.warn("Webcam stream unavailable, opening phone camera capture:", err);
+    const nativeCam = document.getElementById("nativeCameraInput");
+    if (nativeCam) {
+      nativeCam.click();
+    } else {
+      showToast("Camera access unavailable. Please use file upload.");
+    }
   }
 }
 
@@ -471,7 +696,7 @@ function takePhotoSnapshot() {
   const ctx = canvas.getContext("2d");
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-  const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
   document.getElementById("previewImg").src = dataUrl;
   document.getElementById("photoUrl").value = dataUrl;
 
@@ -517,7 +742,7 @@ async function submitCitizenComplaint(e) {
 
   const photoUrl = document.getElementById("photoUrl").value;
   if (!photoUrl) {
-    showToast("⚠️ Step 1 is compulsory: Please take or upload a photo of the issue.");
+    showToast("⚠️ Please take or upload a photo of the civic issue.");
     document.querySelector(".geotag-capture-card")?.scrollIntoView({ behavior: "smooth" });
     return;
   }
@@ -565,7 +790,7 @@ async function submitCitizenComplaint(e) {
     showView("myComplaints");
   } catch (err) {
     console.error("Submission error:", err);
-    showToast(err.message || "Submission failed. Ensure C++ server is running.");
+    showToast(err.message || "Submission failed. Ensure CivicPulse server is running.");
   }
 }
 
@@ -603,8 +828,9 @@ function renderCitizenComplaints() {
     return `
       <article class="citizen-complaint-card">
         <div class="card-media">
-          <img src="${c.photoUrl}" alt="Photo" onclick="openPhotoViewer('${c.photoUrl}')">
+          <img src="${c.photoUrl}" alt="Photo" class="clickable-photo" onclick="openPhotoViewer('${c.photoUrl}', '#CP-${c.id}: ${escapeText(c.type)}')">
           <span class="status-badge ${statusClass}">${statusText}</span>
+          <span class="tap-hint">🔍 Tap to enlarge</span>
         </div>
         <div class="card-content">
           <div class="card-header-row">
@@ -631,6 +857,10 @@ function renderCitizenComplaints() {
               <small class="muted">Status: Registered. Municipal department is reviewing priority ranking.</small>
             </div>
           `}
+
+          <div class="citizen-card-actions">
+            <button class="action-btn-danger" onclick="deleteComplaint(${c.id})">🗑 Delete Complaint</button>
+          </div>
         </div>
       </article>
     `;
@@ -645,7 +875,7 @@ function renderAdminViews() {
   const openIssues = allIssues.filter(c => !isResolved(c));
   const resolvedIssues = allIssues.filter(isResolved);
 
-  // Stats
+  // Stats Counters
   const totalEl = document.getElementById("total");
   const attEl = document.getElementById("attention");
   const progEl = document.getElementById("progress");
@@ -656,7 +886,7 @@ function renderAdminViews() {
   if (progEl) progEl.textContent = allIssues.filter(isInProgress).length;
   if (resEl) resEl.textContent = resolvedIssues.length;
 
-  // Recent rows
+  // Recent rows (Dashboard)
   const recentTbody = document.getElementById("recentRows");
   if (recentTbody) {
     const recent = [...allIssues].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
@@ -667,25 +897,20 @@ function renderAdminViews() {
 
   renderAdminIssues();
 
-  // Priority queue (HeapSort from backend)
+  // Priority queue (Binary Max-Heap from C++ backend)
   const queueTbody = document.getElementById("priorityRows");
   if (queueTbody) {
-    const queue = [...openIssues].sort((a, b) => {
-      if (a.urgent !== b.urgent) return a.urgent ? -1 : 1;
-      return (b.backendPriorityScore || 0) - (a.backendPriorityScore || 0);
-    });
-
-    queueTbody.innerHTML = queue.length
-      ? queue.map((c, i) => renderAdminRow(c, "queue", i)).join("")
-      : `<tr><td colspan="8" class="text-center muted">All complaints resolved! Priority queue is clear.</td></tr>`;
+    queueTbody.innerHTML = heapPriorityIssues.length
+      ? heapPriorityIssues.map((c, i) => renderAdminRow(c, "queue", i)).join("")
+      : `<tr><td colspan="9" class="text-center muted">All complaints resolved! Priority queue is clear.</td></tr>`;
   }
 
-  // Resolved rows
+  // Resolved Issues rows (Resolved tab)
   const resTbody = document.getElementById("resolvedRows");
   if (resTbody) {
     resTbody.innerHTML = resolvedIssues.length
       ? resolvedIssues.map(c => renderAdminRow(c, "resolved")).join("")
-      : `<tr><td colspan="6" class="text-center muted">No resolved issues yet.</td></tr>`;
+      : `<tr><td colspan="7" class="text-center muted">No resolved issues yet. Resolved complaints will appear here.</td></tr>`;
   }
 
   updateMapMarkers();
@@ -734,32 +959,47 @@ function renderAdminIssues() {
 function renderAdminRow(c, mode = "all", rank = 0) {
   const priority = c.backendPriority || "Medium";
   const pill = `<span class="pill ${priority.toLowerCase()}">${escapeText(priority)}</span>`;
-  const photo = `<img src="${c.photoUrl}" alt="Photo" class="thumb-img" onclick="openPhotoViewer('${c.photoUrl}')">`;
+  const photo = `<img src="${c.photoUrl}" alt="Photo" class="thumb-img clickable-photo" onclick="openPhotoViewer('${c.photoUrl}', '#CP-${c.id}: ${escapeText(c.type)}', ${c.id})" title="Click to enlarge">`;
   const citizen = `<b>${escapeText(c.citizenName)}</b><br><small class="muted">+91 ${escapeText(c.citizenPhone)}</small>`;
   const issueTitle = `<b>${escapeText(c.type)}</b><br><small class="muted">#CP-${c.id} · ${escapeText(c.category)}</small>`;
-  const loc = `${escapeText(c.location)}<br><small class="muted">📍 ${Number(c.latitude).toFixed(3)}, ${Number(c.longitude).toFixed(3)}</small>`;
+  const loc = `<a href="javascript:void(0)" onclick="focusComplaintOnMap(${c.id})" class="map-link-btn" title="View Geotag Location & Route">📍 ${escapeText(c.location)}<br><small class="muted">${Number(c.latitude).toFixed(3)}, ${Number(c.longitude).toFixed(3)}</small></a>`;
   const statusPill = `<span class="status-pill status-${c.status.toLowerCase().replace(/\s+/g, '-')}">${escapeText(c.status)}</span>`;
-  const actionBtn = `<button class="action-btn" onclick="openResolutionModal(${c.id})">Update / Resolve</button>`;
+
+  // Standard Action Buttons
+  const resolveBtn = c.status !== "Resolved" && c.status !== "Closed"
+    ? `<button class="action-btn action-btn-resolve" onclick="openResolutionModal(${c.id}, 'Resolved')" title="Mark as Resolved">✓ Resolve</button>`
+    : "";
+  const updateBtn = `<button class="action-btn action-btn-update" onclick="openResolutionModal(${c.id})" title="Update Status & Officer">⚙ Update</button>`;
+  const mapBtn = `<button class="action-btn action-btn-map" onclick="focusComplaintOnMap(${c.id})" title="View Driving Route on Map">🗺 Route</button>`;
+  const deleteBtn = `<button class="action-btn action-btn-delete" onclick="deleteComplaint(${c.id})" title="Delete Complaint">🗑 Delete</button>`;
+
+  const actionGroup = `<div class="action-btn-group">${resolveBtn}${updateBtn}${mapBtn}${deleteBtn}</div>`;
 
   if (mode === "recent") {
-    return `<tr><td>${photo}</td><td>${issueTitle}</td><td>${citizen}</td><td>${loc}</td><td>${c.backendPriorityScore} ${pill}</td><td>${statusPill}</td><td>${actionBtn}</td></tr>`;
+    return `<tr><td>${photo}</td><td>${issueTitle}</td><td>${citizen}</td><td>${loc}</td><td>${c.backendPriorityScore} ${pill}</td><td>${statusPill}</td><td>${actionGroup}</td></tr>`;
   }
   if (mode === "queue") {
-    return `<tr><td><b>#${rank + 1}</b></td><td>${photo}</td><td>${issueTitle}</td><td>${citizen}</td><td>${loc}</td><td><b>${c.backendPriorityScore} pts</b> ${pill}</td><td>${statusPill}</td><td>${actionBtn}</td></tr>`;
+    const desc = c.description ? `<br><small class="muted" style="display:block;max-width:280px;white-space:normal;">"${escapeText(c.description)}"</small>` : "";
+    const fullIssue = `<b>${escapeText(c.type)}</b><br><small class="muted">#CP-${c.id} · ${escapeText(c.category)}</small>${desc}`;
+    const reasonText = c.aiReason
+      ? `<div class="ai-reason-cell"><small>${escapeText(c.aiReason)}</small>${c.aiSource ? `<br><span class="ai-source-badge">${escapeText(c.aiSource)}</span>` : ""}</div>`
+      : `<span class="muted">Standard rule scoring</span>`;
+    return `<tr><td><span class="rank-badge">#${rank + 1}</span></td><td>${photo}</td><td>${fullIssue}</td><td>${citizen}</td><td>${loc}</td><td><b>${c.backendPriorityScore} / 100</b><br>${pill}</td><td>${reasonText}</td><td>${statusPill}</td><td>${actionGroup}</td></tr>`;
   }
   if (mode === "resolved") {
     const notes = c.resolutionNotes ? `<p class="res-notes">"${escapeText(c.resolutionNotes)}"</p>` : `<span class="muted">No notes</span>`;
     const officer = c.assignedTo ? `<small class="muted">By: ${escapeText(c.assignedTo)}</small>` : ``;
-    return `<tr><td>${photo}</td><td>${issueTitle}</td><td>${citizen}</td><td>${loc}</td><td>${notes}${officer}</td><td>${statusPill}</td></tr>`;
+    const resolvedActions = `<div class="action-btn-group">${updateBtn}${mapBtn}${deleteBtn}</div>`;
+    return `<tr><td>${photo}</td><td>${issueTitle}</td><td>${citizen}</td><td>${loc}</td><td>${notes}${officer}</td><td>${statusPill}</td><td>${resolvedActions}</td></tr>`;
   }
 
-  return `<tr><td>${photo}</td><td>${issueTitle}</td><td>${citizen}</td><td>${loc}</td><td>${c.backendPriorityScore} ${pill}</td><td>${statusPill}</td><td>${actionBtn}</td></tr>`;
+  return `<tr><td>${photo}</td><td>${issueTitle}</td><td>${citizen}</td><td>${loc}</td><td>${c.backendPriorityScore} ${pill}</td><td>${statusPill}</td><td>${actionGroup}</td></tr>`;
 }
 
 // ---------- ADMIN RESOLUTION WORKFLOW ----------
 
-function openResolutionModal(id) {
-  const c = allIssues.find(x => x.id === id);
+function openResolutionModal(id, preselectStatus = null) {
+  const c = allIssues.find(x => x.id === id || x.id == id);
   if (!c) return;
 
   document.getElementById("modalComplaintId").value = c.id;
@@ -768,12 +1008,19 @@ function openResolutionModal(id) {
     <b>Issue:</b> ${escapeText(c.type)} (${escapeText(c.category)})<br>
     <b>Citizen:</b> ${escapeText(c.citizenName)} (+91 ${escapeText(c.citizenPhone)})<br>
     <b>Location:</b> ${escapeText(c.location)}<br>
-    <b>Current Status:</b> <span class="pill">${escapeText(c.status)}</span>
+    <b>Current Status:</b> <span class="status-pill status-${c.status.toLowerCase().replace(/\s+/g, '-')}">${escapeText(c.status)}</span>
   `;
 
-  document.getElementById("modalStatusSelect").value = c.status;
-  document.getElementById("modalOfficer").value = c.assignedTo || "Ward Officer Patil";
-  document.getElementById("modalNotes").value = c.resolutionNotes || "";
+  const statusSelect = document.getElementById("modalStatusSelect");
+  if (preselectStatus) {
+    statusSelect.value = preselectStatus;
+  } else {
+    // If opening to resolve/update, default to Resolved if currently open, else keep current
+    statusSelect.value = (c.status === "Submitted" || c.status === "In Progress") ? "Resolved" : c.status;
+  }
+
+  document.getElementById("modalOfficer").value = c.assignedTo || (currentSession?.name || "Ward Response Officer");
+  document.getElementById("modalNotes").value = c.resolutionNotes || (statusSelect.value === "Resolved" ? "Issue inspected and repaired on-site." : "");
 
   document.getElementById("resolutionModal").classList.remove("hidden");
 }
@@ -792,22 +1039,103 @@ async function submitResolution(event) {
 
   try {
     const res = await fetch(`/api/complaints/${id}/status`, {
-      method: "PATCH",
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status, officer, notes })
     });
 
-    if (!res.ok) throw new Error("Status update failed");
-    showToast(`✓ Complaint #CP-${id} updated to ${status}. Recorded in FDS audit log.`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "Status update failed");
+    }
+
+    showToast(`✓ Complaint #CP-${id} updated to ${status}!`);
     closeModal();
     await refreshData();
   } catch (err) {
     console.error("Resolution error:", err);
-    showToast("Error updating status. Check server connection.");
+    showToast("Error updating status: " + (err.message || "Check server connection."));
   }
 }
 
-// ---------- LEAFLET MAPS & DIJKSTRA ROUTE ----------
+// ---------- DELETE COMPLAINT ----------
+
+async function deleteComplaint(id) {
+  if (!confirm(`Are you sure you want to permanently delete complaint #CP-${id}? This action cannot be undone.`)) {
+    return;
+  }
+
+  try {
+    let res = await fetch(`/api/complaints/${id}`, {
+      method: "DELETE"
+    });
+
+    if (!res.ok) {
+      // Fallback to POST
+      res = await fetch(`/api/complaints/${id}/delete`, {
+        method: "POST"
+      });
+    }
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "Failed to delete complaint");
+    }
+
+    showToast(`🗑 Complaint #CP-${id} deleted successfully.`);
+    await refreshData();
+  } catch (err) {
+    console.error("Delete error:", err);
+    showToast("Could not delete complaint: " + (err.message || "Server error"));
+  }
+}
+
+// ---------- LIGHTBOX PHOTO VIEWER ----------
+
+function openPhotoViewer(url, title = "", complaintId = null) {
+  const modal = document.getElementById("imageLightboxModal");
+  const img = document.getElementById("lightboxImg");
+  const caption = document.getElementById("lightboxCaption");
+  const actions = document.getElementById("lightboxActions");
+  if (!modal || !img) return;
+
+  img.src = url;
+  if (caption) {
+    caption.textContent = title || "Civic Complaint Photo";
+  }
+  if (actions) {
+    if (complaintId && currentSession && currentSession.role === "admin") {
+      actions.innerHTML = `
+        <button class="action-btn action-btn-map" onclick="closeLightboxModal(); focusComplaintOnMap(${complaintId})">
+          🗺 Show Location & Route on Map
+        </button>
+      `;
+    } else {
+      actions.innerHTML = "";
+    }
+  }
+  modal.classList.remove("hidden");
+}
+
+function openLightboxFromPreview() {
+  const img = document.getElementById("previewImg");
+  if (img && img.src && !img.src.endsWith("#") && img.src !== window.location.href) {
+    openPhotoViewer(img.src, "Captured Issue Photo Preview");
+  }
+}
+
+function closeLightboxModal() {
+  document.getElementById("imageLightboxModal")?.classList.add("hidden");
+}
+
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") {
+    closeLightboxModal();
+    closeModal();
+  }
+});
+
+// ---------- LEAFLET MAPS, GEOTAG PINNING & ROUTING ----------
 
 function initLeafletMaps() {
   if (typeof L === "undefined") return;
@@ -818,57 +1146,128 @@ function initLeafletMaps() {
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(fullMapInstance);
   }
 
-  const dashContainer = document.getElementById("dashMap");
-  if (dashContainer && !dashMapInstance) {
-    dashMapInstance = L.map("dashMap").setView(DEPOT_COORDS, 13);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(dashMapInstance);
-  }
-
   updateMapMarkers();
 }
 
 function updateMapMarkers() {
-  const maps = [dashMapInstance, fullMapInstance].filter(Boolean);
+  if (!fullMapInstance) return;
 
-  maps.forEach(map => {
-    map.eachLayer(layer => {
-      if (layer instanceof L.Marker || layer instanceof L.Polyline) {
-        map.removeLayer(layer);
-      }
+  fullMapInstance.eachLayer(layer => {
+    if (layer instanceof L.Marker || layer instanceof L.Polyline) {
+      fullMapInstance.removeLayer(layer);
+    }
+  });
+
+  const depotIcon = L.divIcon({
+    className: "custom-depot-pin",
+    html: `<div style="background:#582c8b; color:white; border-radius:50%; width:28px; height:28px; display:flex; align-items:center; justify-content:center; font-weight:bold; box-shadow:0 2px 6px rgba(0,0,0,0.3); border:2px solid white;">★</div>`,
+    iconSize: [28, 28]
+  });
+  L.marker(DEPOT_COORDS, { icon: depotIcon }).addTo(fullMapInstance).bindPopup("<b>Municipal Central Depot</b><br><small>Starting dispatch base</small>");
+
+  allIssues.forEach(c => {
+    const priorityLabel = c.backendPriority || "Medium";
+    const color =
+      priorityLabel === "URGENT" || priorityLabel === "Critical" ? "#cb514b" :
+      priorityLabel === "High" ? "#b97a21" :
+      priorityLabel === "Medium" ? "#4e7fb6" : "#42845a";
+
+    const pinIcon = L.divIcon({
+      className: "custom-issue-pin",
+      html: `<div style="background:${color}; color:white; border-radius:50%; width:24px; height:24px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:bold; border:2px solid white; box-shadow:0 2px 6px rgba(0,0,0,0.25); cursor:pointer;">${c.id}</div>`,
+      iconSize: [24, 24]
     });
 
-    const depotIcon = L.divIcon({
-      className: "custom-depot-pin",
-      html: `<div style="background:#582c8b; color:white; border-radius:50%; width:26px; height:26px; display:flex; align-items:center; justify-content:center; font-weight:bold;">★</div>`,
-      iconSize: [26, 26]
-    });
-    L.marker(DEPOT_COORDS, { icon: depotIcon }).addTo(map).bindPopup("<b>Municipal Central Depot</b>");
-
-    allIssues.forEach(c => {
-      const priorityLabel = c.backendPriority || "Medium";
-      const color =
-        priorityLabel === "URGENT" || priorityLabel === "Critical" ? "#cb514b" :
-        priorityLabel === "High" ? "#b97a21" :
-        priorityLabel === "Medium" ? "#4e7fb6" : "#42845a";
-
-      const pinIcon = L.divIcon({
-        className: "custom-issue-pin",
-        html: `<div style="background:${color}; color:white; border-radius:50%; width:22px; height:22px; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:bold; border:2px solid white;">${c.id}</div>`,
-        iconSize: [22, 22]
-      });
-
-      L.marker([c.latitude, c.longitude], { icon: pinIcon }).addTo(map).bindPopup(`
-        <div style="max-width:180px;">
-          <img src="${c.photoUrl}" style="width:100%; height:75px; object-fit:cover; border-radius:4px;">
-          <b>#CP-${c.id}: ${escapeText(c.type)}</b><br>
-          <small>By: ${escapeText(c.citizenName)}</small><br>
-          <span class="pill ${priorityLabel.toLowerCase()}">${priorityLabel} (${c.backendPriorityScore})</span>
+    const marker = L.marker([c.latitude, c.longitude], { icon: pinIcon }).addTo(fullMapInstance);
+    marker.bindPopup(`
+      <div style="max-width:200px;">
+        <img src="${c.photoUrl}" style="width:100%; height:90px; object-fit:cover; border-radius:4px; cursor:pointer;" onclick="openPhotoViewer('${c.photoUrl}', '#CP-${c.id}: ${escapeText(c.type)}', ${c.id})">
+        <b>#CP-${c.id}: ${escapeText(c.type)}</b><br>
+        <small>Reported by: ${escapeText(c.citizenName)}</small><br>
+        <span class="pill ${priorityLabel.toLowerCase()}">${priorityLabel} (${c.backendPriorityScore} pts)</span>
+        <div style="margin-top:6px;">
+          <button style="width:100%; padding:4px; font-size:11px; background:#17613a; color:white; border:none; border-radius:4px; cursor:pointer;" onclick="focusComplaintOnMap(${c.id})">🗺 Route from Depot</button>
         </div>
-      `);
-    });
+      </div>
+    `);
   });
 }
 
+// Focus on a specific complaint's geotag and draw driving route from Municipal Depot
+function focusComplaintOnMap(id) {
+  showView("mapView");
+  const c = allIssues.find(x => x.id === id || x.id == id);
+  if (!c) return;
+
+  setTimeout(() => {
+    if (!fullMapInstance) initLeafletMaps();
+    if (!fullMapInstance) return;
+
+    fullMapInstance.invalidateSize();
+    const target = [c.latitude, c.longitude];
+    fullMapInstance.setView(target, 15);
+
+    // Draw route from Municipal Central Depot to this complaint
+    if (routePolyline) {
+      fullMapInstance.removeLayer(routePolyline);
+    }
+
+    const routePoints = [DEPOT_COORDS, target];
+    routePolyline = L.polyline(routePoints, {
+      color: "#17613a",
+      weight: 5,
+      dashArray: "10, 8",
+      opacity: 0.9
+    }).addTo(fullMapInstance);
+
+    fullMapInstance.fitBounds(routePolyline.getBounds(), { padding: [60, 60] });
+
+    // Calculate distance and travel time
+    const distKm = calculateDistanceKm(DEPOT_COORDS[0], DEPOT_COORDS[1], c.latitude, c.longitude);
+    const estMins = Math.max(5, Math.round(distKm * 2.8));
+
+    // Update Route Banner
+    const banner = document.getElementById("mapRouteCard");
+    const titleEl = document.getElementById("mapRouteTitle");
+    const detailsEl = document.getElementById("mapRouteDetails");
+    if (banner) {
+      banner.classList.remove("hidden");
+      if (titleEl) titleEl.textContent = `Route: Municipal Depot ➔ #CP-${c.id} (${c.type})`;
+      if (detailsEl) {
+        detailsEl.innerHTML = `
+          <span><b>Distance:</b> ${distKm.toFixed(2)} km</span> &nbsp;•&nbsp;
+          <span><b>Estimated Time:</b> ${estMins} mins</span> &nbsp;•&nbsp;
+          <span><b>GPS Coordinates:</b> ${c.latitude.toFixed(4)}N, ${c.longitude.toFixed(4)}E</span> &nbsp;•&nbsp;
+          <span><b>Citizen Contact:</b> +91 ${escapeText(c.citizenPhone)} (${escapeText(c.citizenName)})</span>
+        `;
+      }
+    }
+
+    showToast(`🗺 Plotted route to complaint #CP-${c.id} (${distKm.toFixed(2)} km)`);
+  }, 250);
+}
+
+function clearSelectedMapRoute() {
+  if (routePolyline && fullMapInstance) {
+    fullMapInstance.removeLayer(routePolyline);
+    routePolyline = null;
+  }
+  document.getElementById("mapRouteCard")?.classList.add("hidden");
+  if (fullMapInstance) fullMapInstance.setView(DEPOT_COORDS, 13);
+}
+
+function calculateDistanceKm(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Earth radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
+
+// Multi-Stop Dijkstra route
 async function requestDispatchRoute() {
   showToast("Computing Dijkstra shortest path via C++ Graph...");
   try {
@@ -897,85 +1296,6 @@ async function requestDispatchRoute() {
   }
 }
 
-// ---------- FDS METRICS & BST TESTER ----------
-
-async function loadFdsMetrics() {
-  try {
-    const res = await fetch("/api/fds-metrics");
-    if (!res.ok) throw new Error("Metrics error");
-    const m = await res.json();
-
-    document.getElementById("fdsHeapCount").textContent = m.maxHeap.elements;
-    document.getElementById("fdsHeapHeight").textContent = m.maxHeap.treeDepth;
-    document.getElementById("fdsBstCount").textContent = m.bst.elements;
-    document.getElementById("fdsBstHeight").textContent = m.bst.treeHeight;
-    document.getElementById("fdsVertices").textContent = m.graph.vertexCount;
-    document.getElementById("fdsEdges").textContent = m.graph.edgeCount;
-    document.getElementById("fdsAuditCount").textContent = m.doublyLinkedList.recordsCount;
-
-    const openList = allIssues.filter(x => x.status !== "Resolved" && x.status !== "Closed");
-    const heapVisual = openList.map((c, idx) => `[${idx}] #CP-${c.id} (P:${c.backendPriorityScore})`).join("  ➔  ");
-    document.getElementById("heapArrayView").innerHTML = `<code>${heapVisual || "Max-Heap is currently clear"}</code>`;
-  } catch (err) {
-    console.debug("Metrics error:", err);
-  }
-
-  loadAuditLog();
-}
-
-async function testBstSearch() {
-  const searchId = document.getElementById("bstTestId").value;
-  if (!searchId) {
-    showToast("Enter a Complaint ID to test BST lookup.");
-    return;
-  }
-
-  try {
-    const res = await fetch(`/api/complaints/${searchId}`);
-    const outBox = document.getElementById("bstSearchResult");
-
-    if (res.ok) {
-      const data = await res.json();
-      outBox.innerHTML = `
-        <span class="pill-badge pill-green">✓ BST Hit in ${data.fdsLookup.comparisons} comparisons</span><br>
-        <b>#CP-${data.id}:</b> ${data.type} (Reported by: ${data.citizenName})
-      `;
-    } else {
-      outBox.innerHTML = `<span class="pill-badge pill-yellow">✗ Miss</span>: Complaint #${searchId} not found in BST.`;
-    }
-  } catch (err) {
-    console.debug("BST search test error:", err);
-  }
-}
-
-async function loadAuditLog() {
-  try {
-    const res = await fetch("/api/audit-log");
-    if (!res.ok) throw new Error("Audit log error");
-    const list = await res.json();
-    const container = document.getElementById("auditLogList");
-    if (!container) return;
-
-    if (list.length === 0) {
-      container.innerHTML = `<p class="muted small">No audit actions recorded yet.</p>`;
-      return;
-    }
-
-    container.innerHTML = list.slice(0, 10).map(item => `
-      <div class="audit-item">
-        <div class="audit-item-header">
-          <strong>#CP-${item.complaintId}: ${escapeText(item.action)}</strong>
-          <small class="muted">${new Date(item.timestamp * 1000).toLocaleTimeString()}</small>
-        </div>
-        <p class="small">${escapeText(item.previousStatus || "Start")} ➔ <b>${escapeText(item.newStatus)}</b></p>
-        ${item.notes ? `<p class="small muted">"${escapeText(item.notes)}"</p>` : ""}
-      </div>
-    `).join("");
-  } catch (err) {
-    console.debug("Audit log error:", err);
-  }
-}
-
 // ---------- VIEW NAVIGATION ----------
 
 function showView(viewId) {
@@ -1000,10 +1320,9 @@ function showView(viewId) {
     dashboard: "Municipal Dashboard",
     citizens: "Registered Citizen Accounts",
     issues: "All City Complaints",
-    priority: "Priority Queue (Max-Heap)",
-    mapView: "Interactive Map & Dispatch",
-    resolved: "Resolved Issues",
-    fds: "Fundamentals of Data Structures Inspector"
+    priority: "Priority Queue (Heap)",
+    mapView: "Interactive Map & Dispatch Route",
+    resolved: "Resolved Issues"
   };
 
   document.getElementById("pageTitle").textContent = titles[viewId] || viewId;
@@ -1012,11 +1331,10 @@ function showView(viewId) {
   if (viewId === "mapView" && fullMapInstance) {
     setTimeout(() => fullMapInstance.invalidateSize(), 200);
   }
-  if (viewId === "dashboard" && dashMapInstance) {
-    setTimeout(() => dashMapInstance.invalidateSize(), 200);
-  }
-  if (viewId === "fds") {
-    loadFdsMetrics();
+
+  // Refresh data on switching to views
+  if (viewId === "myComplaints" || viewId === "resolved" || viewId === "dashboard" || viewId === "issues") {
+    refreshData(true);
   }
 }
 
@@ -1066,8 +1384,4 @@ function showToast(msg) {
   showToast.timer = setTimeout(() => {
     toast.style.display = "none";
   }, 3200);
-}
-
-function openPhotoViewer(url) {
-  window.open(url, "_blank");
 }

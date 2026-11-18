@@ -39,42 +39,45 @@
       </div>
 
       <!-- FORM 1: CITIZEN LOGIN -->
-      <form id="citizenLoginForm" class="auth-form" onsubmit="handleCitizenLogin(event)">
+      <form id="citizenLoginForm" class="auth-form" onsubmit="handleCitizenLogin(event)" novalidate>
+        <div id="citizenLoginError" class="auth-error-msg hidden"></div>
         <label>Mobile Number
-          <input id="loginPhone" type="tel" placeholder="Enter your 10-digit mobile" required pattern="[0-9]{10}">
+          <input id="loginPhone" type="tel" placeholder="Enter your 10-digit mobile" maxlength="10">
         </label>
         <label>Password
-          <input id="loginPassword" type="password" placeholder="Enter password" required>
+          <input id="loginPassword" type="password" placeholder="Enter password">
         </label>
         <button type="submit" class="primary full-width">Log In to CivicPulse</button>
         <p class="auth-switch-note">New user? <a href="javascript:void(0)" onclick="switchAuthTab('citizenSignup')">Create an account</a></p>
       </form>
 
       <!-- FORM 2: CITIZEN SIGN UP -->
-      <form id="citizenSignupForm" class="auth-form hidden" onsubmit="handleCitizenSignup(event)">
+      <form id="citizenSignupForm" class="auth-form hidden" onsubmit="handleCitizenSignup(event)" novalidate>
+        <div id="citizenSignupError" class="auth-error-msg hidden"></div>
         <label>Your Full Name
-          <input id="signupName" placeholder="e.g. your full name" required>
+          <input id="signupName" placeholder="e.g. John Doe">
         </label>
         <label>Mobile Number
-          <input id="signupPhone" type="tel" placeholder="10-digit mobile number" required pattern="[0-9]{10}">
+          <input id="signupPhone" type="tel" placeholder="10-digit mobile number" maxlength="10">
         </label>
         <label>Create Password
-          <input id="signupPassword" type="password" placeholder="Choose a password" required minlength="4">
+          <input id="signupPassword" type="password" placeholder="Choose a password (min 4 characters)">
+        </label>
+        <label>Confirm Password
+          <input id="signupConfirmPassword" type="password" placeholder="Re-enter your password">
         </label>
         <button type="submit" class="primary full-width">Create Citizen Account</button>
         <p class="auth-switch-note">Already have an account? <a href="javascript:void(0)" onclick="switchAuthTab('citizenLogin')">Log in</a></p>
       </form>
 
       <!-- FORM 3: ADMIN / OFFICER LOGIN -->
-      <form id="adminLoginForm" class="auth-form hidden" onsubmit="handleAdminLogin(event)">
-        <div class="admin-notice">
-          <small>🛡 Municipal Officer Portal: Manage city-wide complaints, Max-Heap priority queue, and fleet dispatch.</small>
-        </div>
+      <form id="adminLoginForm" class="auth-form hidden" onsubmit="handleAdminLogin(event)" novalidate>
+        <div id="adminLoginError" class="auth-error-msg hidden"></div>
         <label>Administrator Username
-          <input id="adminUsername" placeholder="Username (Default: admin)" required>
+          <input id="adminUsername" placeholder="Username (e.g. admin)">
         </label>
         <label>Security Password / PIN
-          <input id="adminPassword" type="password" placeholder="Password (Default: admin123 or 1234)" required>
+          <input id="adminPassword" type="password" placeholder="Enter password (e.g. admin123 or 1234)">
         </label>
         <button type="submit" class="primary full-width" style="background:#253e30;">Log In as Municipal Officer</button>
         <p class="auth-switch-note"><a href="javascript:void(0)" onclick="switchAuthTab('citizenLogin')">← Back to Citizen Login</a></p>
@@ -83,12 +86,12 @@
       <!-- QR CODE & PHONE APP CONNECT HELPER -->
       <div class="phone-connect-box">
         <div class="phone-connect-flex">
-          <img id="phoneQrCode" class="qr-code-img" src="https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=http://192.168.0.102:8080" alt="Scan to open on phone">
+          <img id="phoneQrCode" class="qr-code-img" src="https://api.qrserver.com/v1/create-qr-code/?size=130x130&data=http://192.168.0.101:8080" alt="Scan to open on phone">
           <div class="phone-connect-text">
             <strong>📱 Open on your Phone:</strong>
             <p class="small">Scan this QR code with your phone camera or visit:</p>
-            <code class="network-link">http://192.168.0.102:8080</code>
-            <small class="muted" style="display:block; margin-top:4px;">(Connect phone to same Wi-Fi)</small>
+            <code id="networkLinkDisplay" class="network-link">http://192.168.0.101:8080</code>
+            <small class="muted" style="display:block; margin-top:4px;">(Connect phone to same Wi-Fi network)</small>
           </div>
         </div>
       </div>
@@ -118,7 +121,6 @@
         <button id="nav-priority" onclick="showView('priority')">⚑ Priority Queue (Heap)</button>
         <button id="nav-map" onclick="showView('mapView')">🗺 Interactive Map & Route</button>
         <button id="nav-resolved" onclick="showView('resolved')">✓ Resolved Issues</button>
-        <button id="nav-fds" onclick="showView('fds')">⚗ FDS Live Inspector</button>
       </nav>
 
       <!-- SIDEBAR BOTTOM PROFILE -->
@@ -158,12 +160,12 @@
           <p class="muted">Take a photo using your phone camera or upload a geotagged image. Location and priority are automatically calculated from your photo!</p>
         </div>
 
-        <!-- STEP 1: PHOTO & GEOTAG (COMPULSORY) -->
+        <!-- STEP 1: PHOTO & GEOTAG -->
         <div class="panel geotag-capture-card">
           <div class="step-title-row">
             <span class="step-num">1</span>
             <div>
-              <h3>Take Photo or Upload Geotagged Image (Compulsory)</h3>
+              <h3>Take Photo or Upload Geotagged Image</h3>
               <p class="muted small">Your location is directly extracted from the photo GPS coordinates.</p>
             </div>
           </div>
@@ -171,6 +173,7 @@
           <div class="upload-options-grid">
             <!-- CAMERA -->
             <div class="camera-card">
+              <input type="file" id="nativeCameraInput" accept="image/*" capture="environment" style="display:none" onchange="handleFileSelect(event)">
               <button type="button" class="primary full-width" onclick="toggleCamera()">
                 📸 Open Camera & Capture Photo
               </button>
@@ -187,7 +190,7 @@
               <div class="dropzone-content">
                 <span class="upload-icon">📁</span>
                 <strong>Choose Photo from Device</strong>
-                <small>Auto-reads embedded GPS latitude & longitude</small>
+                <small>Select image file from gallery or storage</small>
               </div>
             </div>
           </div>
@@ -195,7 +198,10 @@
           <!-- PHOTO & EXTRACTED LOCATION DISPLAY -->
           <div id="photoSuccessCard" class="photo-success-card hidden">
             <div class="photo-success-flex">
-              <img id="previewImg" src="" alt="Captured issue photo" class="preview-thumbnail">
+              <div class="thumbnail-wrapper" onclick="openLightboxFromPreview()" title="Click to view large photo">
+                <img id="previewImg" src="" alt="Captured issue photo" class="preview-thumbnail clickable-photo">
+                <span class="zoom-badge">🔍 Click to Enlarge</span>
+              </div>
               <div class="photo-success-details">
                 <span class="pill-badge pill-green">✓ Photo Captured & Geotagged</span>
                 <h4 id="extractedIssueTitle">Civic Issue Identified</h4>
@@ -411,10 +417,11 @@
               <tr>
                 <th>Heap Rank</th>
                 <th>Photo</th>
-                <th>Issue</th>
+                <th>Complaint & Description</th>
                 <th>Citizen</th>
                 <th>Location</th>
-                <th>Score</th>
+                <th>Priority Score</th>
+                <th>AI Reason</th>
                 <th>Status</th>
                 <th>Action</th>
               </tr>
@@ -439,6 +446,18 @@
             <span class="legend-dot purple">★ Depot</span>
           </div>
         </div>
+
+        <div id="mapRouteCard" class="panel map-route-card hidden">
+          <div class="map-route-header">
+            <span class="pill-badge pill-green">📍 Active Complaint Route</span>
+            <strong id="mapRouteTitle">Complaint Route</strong>
+            <button class="close-route-btn" onclick="clearSelectedMapRoute()">✕ Reset</button>
+          </div>
+          <div id="mapRouteDetails" class="map-route-details">
+            Showing driving route from Municipal Central Depot to geotagged complaint location.
+          </div>
+        </div>
+
         <div class="panel">
           <div id="fullMap" class="map-container" style="height: 520px; border-radius: 8px;"></div>
         </div>
@@ -446,8 +465,12 @@
 
       <!-- VIEW 8: RESOLVED ISSUES (ADMIN ONLY) -->
       <section id="resolved" class="view hidden">
-        <h1>Resolved Community Issues</h1>
-        <p class="muted">Successfully fixed issues with resolution notes, timestamps, and technician assignment.</p>
+        <div class="view-header">
+          <div>
+            <h1>Resolved Community Issues</h1>
+            <p class="muted">Successfully fixed issues with resolution notes, timestamps, and technician assignment.</p>
+          </div>
+        </div>
         <div class="panel table-wrap">
           <table>
             <thead>
@@ -458,87 +481,11 @@
                 <th>Location</th>
                 <th>Resolution Notes & Assigned Officer</th>
                 <th>Status</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody id="resolvedRows"></tbody>
           </table>
-        </div>
-      </section>
-
-      <!-- VIEW 9: FDS LIVE INSPECTOR (ADMIN ONLY) -->
-      <section id="fds" class="view hidden">
-        <h1>Fundamentals of Data Structures (FDS) Inspector</h1>
-        <p class="muted">Live academic visualizer demonstrating C++ Data Structures implementation and performance metrics.</p>
-
-        <div class="fds-grid">
-          <!-- 1. BINARY MAX-HEAP -->
-          <article class="panel fds-card">
-            <div class="fds-card-header">
-              <h3>1. Binary Max-Heap (Priority Queue)</h3>
-              <span class="pill-badge pill-green">O(log N) Insert & Extract</span>
-            </div>
-            <p>Maintains priority order. Root is always the highest priority civic complaint.</p>
-            <div class="fds-metric-list">
-              <div><span>Heap Elements:</span> <strong id="fdsHeapCount">0</strong></div>
-              <div><span>Tree Height:</span> <strong id="fdsHeapHeight">0</strong></div>
-              <div><span>Peek Max:</span> <strong>O(1)</strong></div>
-              <div><span>Extract Max:</span> <strong>O(log N)</strong></div>
-            </div>
-            <div class="fds-tree-visual" id="heapArrayView">
-              <code>Heap array: [Empty]</code>
-            </div>
-          </article>
-
-          <!-- 2. BINARY SEARCH TREE -->
-          <article class="panel fds-card">
-            <div class="fds-card-header">
-              <h3>2. Binary Search Tree (BST)</h3>
-              <span class="pill-badge pill-blue">O(log N) ID Index</span>
-            </div>
-            <p>Indexes all complaints uniquely by ID. In-order traversal generates sorted ID records.</p>
-            <div class="fds-metric-list">
-              <div><span>Total BST Nodes:</span> <strong id="fdsBstCount">0</strong></div>
-              <div><span>Tree Height:</span> <strong id="fdsBstHeight">0</strong></div>
-            </div>
-            <div class="bst-search-tester">
-              <label>Test BST Search Lookup:</label>
-              <div style="display:flex; gap:8px;">
-                <input id="bstTestId" type="number" placeholder="Enter ID (e.g. 1)" style="max-width:160px;">
-                <button class="secondary-btn" onclick="testBstSearch()">Execute Search</button>
-              </div>
-              <div id="bstSearchResult" class="bst-result-box">Search test output...</div>
-            </div>
-          </article>
-
-          <!-- 3. CIVIC GRAPH & DIJKSTRA -->
-          <article class="panel fds-card">
-            <div class="fds-card-header">
-              <h3>3. City Graph & Dijkstra Shortest Path</h3>
-              <span class="pill-badge pill-purple">O((V + E) log V)</span>
-            </div>
-            <p>Road network graph connecting municipal hubs and complaint locations.</p>
-            <div class="fds-metric-list">
-              <div><span>Graph Vertices:</span> <strong id="fdsVertices">9</strong></div>
-              <div><span>Road Edges:</span> <strong id="fdsEdges">12</strong></div>
-            </div>
-            <div class="graph-nodes-list" id="graphNodesList">
-              <code>Nodes: Municipal Central Depot, Near School, Near Hospital, Market Area...</code>
-            </div>
-          </article>
-
-          <!-- 4. DOUBLY LINKED LIST -->
-          <article class="panel fds-card">
-            <div class="fds-card-header">
-              <h3>4. Doubly Linked List (Audit Log)</h3>
-              <span class="pill-badge pill-yellow">O(1) Append / Bidirectional</span>
-            </div>
-            <p>Maintains persistent resolution history and complaint status changes.</p>
-            <div class="fds-metric-list">
-              <div><span>Audit Records:</span> <strong id="fdsAuditCount">0</strong></div>
-              <div><span>Traversal:</span> <strong>Bidirectional</strong></div>
-            </div>
-            <div id="auditLogList" class="audit-trail-container"></div>
-          </article>
         </div>
       </section>
 
@@ -555,20 +502,20 @@
               <input type="hidden" id="modalComplaintId">
               <label>Update Status
                 <select id="modalStatusSelect" required>
-                  <option value="Submitted">Submitted (Under review)</option>
-                  <option value="In Progress">In Progress (Field crew assigned)</option>
                   <option value="Resolved">Resolved (Work completed)</option>
+                  <option value="In Progress">In Progress (Field crew assigned)</option>
+                  <option value="Submitted">Submitted (Under review)</option>
                   <option value="Closed">Closed (Verified & archived)</option>
                 </select>
               </label>
               <label>Assigned Officer / Technician
-                <input id="modalOfficer" placeholder="e.g. Road Maintenance Crew, Electrical Inspector" required>
+                <input id="modalOfficer" placeholder="e.g. Ward Maintenance Crew, Road Inspector" required>
               </label>
               <label>Resolution Notes & Action Taken
                 <textarea id="modalNotes" rows="3" placeholder="Describe the repair work conducted, materials used, or inspection outcome..." required></textarea>
               </label>
               <div class="modal-actions">
-                <button type="submit" class="primary">Save Status & Update FDS Engine</button>
+                <button type="submit" class="primary">Save Status & Update</button>
                 <button type="button" class="secondary-btn" onclick="closeModal()">Cancel</button>
               </div>
             </form>
@@ -576,10 +523,20 @@
         </div>
       </div>
 
+      <!-- IMAGE LIGHTBOX MODAL (BIG PHOTO VIEWER) -->
+      <div id="imageLightboxModal" class="lightbox-modal hidden" onclick="closeLightboxModal(event)">
+        <div class="lightbox-content" onclick="event.stopPropagation()">
+          <button class="lightbox-close" onclick="closeLightboxModal()" title="Close photo viewer">&times;</button>
+          <img id="lightboxImg" src="" alt="Enlarged issue photo">
+          <div id="lightboxCaption" class="lightbox-caption"></div>
+          <div id="lightboxActions" class="lightbox-actions"></div>
+        </div>
+      </div>
+
       <!-- TOAST NOTIFICATIONS -->
       <div id="toast" role="status"></div>
 
-      <footer>CivicPulse · Fundamentals of Data Structures (C++) Project · Real-Life Civic Platform</footer>
+      <footer>CivicPulse · Smart Geotag Civic Resolution Platform</footer>
     </main>
 
     <!-- MOBILE BOTTOM NAVIGATION (Smartphones) -->

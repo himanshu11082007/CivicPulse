@@ -12,7 +12,13 @@
 #include <thread>
 #include <cmath>
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+
 #include "Complaint.h"
+#include "AiService.h"
 #include "ds/MaxHeap.h"
 #include "ds/BST.h"
 #include "ds/CivicGraph.h"
@@ -26,6 +32,34 @@ using json = nlohmann::json;
 
 const string COMPLAINTS_FILE = "complaints.txt";
 const string USERS_FILE = "users.txt";
+
+// Helper to detect actual local LAN IPv4 address on Windows
+std::string getLocalIpAddress() {
+    std::string detectedIp = "192.168.0.101"; // Default fallback
+#ifdef _WIN32
+    SOCKET sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock != INVALID_SOCKET) {
+        sockaddr_in loopback;
+        memset(&loopback, 0, sizeof(loopback));
+        loopback.sin_family = AF_INET;
+        loopback.sin_addr.s_addr = inet_addr("8.8.8.8");
+        loopback.sin_port = htons(53);
+        if (connect(sock, (sockaddr*)&loopback, sizeof(loopback)) == 0) {
+            sockaddr_in name;
+            int nameLen = sizeof(name);
+            if (getsockname(sock, (sockaddr*)&name, &nameLen) == 0) {
+                char buf[64] = {0};
+                const char* p = inet_ntop(AF_INET, &name.sin_addr, buf, sizeof(buf));
+                if (p && std::string(p) != "127.0.0.1" && std::string(p) != "0.0.0.0") {
+                    detectedIp = p;
+                }
+            }
+        }
+        closesocket(sock);
+    }
+#endif
+    return detectedIp;
+}
 
 // ---------- USER MODEL ----------
 
@@ -127,8 +161,12 @@ json complaintToJson(const Complaint& c) {
         {"people", c.people},
         {"reportedAt", c.reportedAt},
         {"urgent", c.urgent},
+        {"locationSensitivity", c.locationSensitivity},
+        {"emergencyOverride", c.emergencyOverride},
         {"priorityScore", c.priorityScore()},
         {"priority", c.priorityLabel()},
+        {"aiReason", c.aiReason},
+        {"aiSource", c.aiSource},
         {"latitude", c.latitude},
         {"longitude", c.longitude},
         {"photoUrl", c.photoUrl},
@@ -238,8 +276,8 @@ void loadComplaintsFromFile() {
 void setupApiRoutes() {
     apiServer.set_default_headers({
         {"Access-Control-Allow-Origin", "*"},
-        {"Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS"},
-        {"Access-Control-Allow-Headers", "Content-Type"}
+        {"Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS"},
+        {"Access-Control-Allow-Headers", "Content-Type, Authorization"}
     });
 
     apiServer.Options(R"(/.*)", [](const httplib::Request&, httplib::Response& res) {
@@ -248,12 +286,25 @@ void setupApiRoutes() {
 
     // Health check
     apiServer.Get("/api/health", [](const httplib::Request&, httplib::Response& res) {
+        std::string ip = getLocalIpAddress();
         json info = {
             {"status", "ok"},
             {"project", "CivicPulse"},
             {"version", "3.0-Production"},
-            {"networkIp", "192.168.0.102"},
+            {"networkIp", ip},
+            {"networkUrl", "http://" + ip + ":8080"},
             {"structures", {"Binary Max-Heap", "Binary Search Tree", "Graph (Dijkstra)", "Doubly Linked List"}}
+        };
+        res.set_content(info.dump(2), "application/json");
+    });
+
+    // Dynamic Network IP and Phone Access Info
+    apiServer.Get("/api/network-info", [](const httplib::Request&, httplib::Response& res) {
+        std::string ip = getLocalIpAddress();
+        json info = {
+            {"ip", ip},
+            {"port", 8080},
+            {"url", "http://" + ip + ":8080"}
         };
         res.set_content(info.dump(2), "application/json");
     });
@@ -267,7 +318,7 @@ void setupApiRoutes() {
             body = json::parse(req.body);
         } catch (...) {
             res.status = 400;
-            res.set_content(R"({"error":"Invalid JSON"})", "application/json");
+            res.set_content(R"({"error":"Invalid JSON payload."})", "application/json");
             return;
         }
 
@@ -275,9 +326,33 @@ void setupApiRoutes() {
         string name = body.value("name", "");
         string password = body.value("password", "");
 
-        if (phone.empty() || name.empty()) {
+        if (name.empty()) {
             res.status = 400;
-            res.set_content(R"({"error":"Name and Phone number are required"})", "application/json");
+            res.set_content(R"({"error":"Please enter your full name."})", "application/json");
+            return;
+        }
+        if (phone.empty()) {
+            res.status = 400;
+            res.set_content(R"({"error":"Please enter your 10-digit mobile number."})", "application/json");
+            return;
+        }
+
+        bool validDigits = (phone.length() == 10);
+        for (char ch : phone) {
+            if (!isdigit(static_cast<unsigned char>(ch))) {
+                validDigits = false;
+                break;
+            }
+        }
+        if (!validDigits) {
+            res.status = 400;
+            res.set_content(R"({"error":"Please enter a valid 10-digit mobile number (digits only)."})", "application/json");
+            return;
+        }
+
+        if (password.length() < 4) {
+            res.status = 400;
+            res.set_content(R"({"error":"Password must be at least 4 characters long."})", "application/json");
             return;
         }
 
@@ -285,7 +360,7 @@ void setupApiRoutes() {
         for (const auto& u : allUsers) {
             if (u.phone == phone) {
                 res.status = 409;
-                res.set_content(R"({"error":"Mobile number already registered. Please log in."})", "application/json");
+                res.set_content(R"({"error":"This mobile number is already registered. Please log in."})", "application/json");
                 return;
             }
         }
@@ -320,7 +395,7 @@ void setupApiRoutes() {
             body = json::parse(req.body);
         } catch (...) {
             res.status = 400;
-            res.set_content(R"({"error":"Invalid JSON"})", "application/json");
+            res.set_content(R"({"error":"Invalid JSON payload."})", "application/json");
             return;
         }
 
@@ -331,31 +406,72 @@ void setupApiRoutes() {
         std::lock_guard<std::mutex> lock(dataMutex);
 
         if (role == "admin") {
-            if ((phone == "admin" || phone == "admin@civicpulse.org") &&
-                (password == "admin123" || password == "1234")) {
-                json resp = {
-                    {"success", true},
-                    {"user", {
-                        {"phone", "admin"},
-                        {"name", "Municipal Administrator"},
-                        {"role", "admin"}
-                    }}
-                };
-                res.set_content(resp.dump(2), "application/json");
-                return;
-            } else {
-                res.status = 401;
-                res.set_content(R"({"error":"Invalid Administrator credentials. Default password is 'admin123' or PIN '1234'."})", "application/json");
+            if (phone.empty()) {
+                res.status = 400;
+                res.set_content(R"({"error":"Please enter administrator username."})", "application/json");
                 return;
             }
+            if (password.empty()) {
+                res.status = 400;
+                res.set_content(R"({"error":"Please enter administrator password."})", "application/json");
+                return;
+            }
+
+            if (phone != "admin" && phone != "admin@civicpulse.org") {
+                res.status = 404;
+                res.set_content(R"({"error":"Administrator account not found."})", "application/json");
+                return;
+            }
+
+            if (password != "admin123" && password != "1234") {
+                res.status = 401;
+                res.set_content(R"({"error":"Wrong password. Please enter the correct administrator password or PIN."})", "application/json");
+                return;
+            }
+
+            json resp = {
+                {"success", true},
+                {"user", {
+                    {"phone", "admin"},
+                    {"name", "Municipal Administrator"},
+                    {"role", "admin"}
+                }}
+            };
+            res.set_content(resp.dump(2), "application/json");
+            return;
         }
 
-        // Citizen Login
+        // Citizen Login Validations
+        if (phone.empty()) {
+            res.status = 400;
+            res.set_content(R"({"error":"Please enter your 10-digit mobile number."})", "application/json");
+            return;
+        }
+
+        bool validDigits = (phone.length() == 10);
+        for (char ch : phone) {
+            if (!isdigit(static_cast<unsigned char>(ch))) {
+                validDigits = false;
+                break;
+            }
+        }
+        if (!validDigits) {
+            res.status = 400;
+            res.set_content(R"({"error":"Please enter a valid 10-digit mobile number."})", "application/json");
+            return;
+        }
+
+        if (password.empty()) {
+            res.status = 400;
+            res.set_content(R"({"error":"Please enter your password."})", "application/json");
+            return;
+        }
+
         for (const auto& u : allUsers) {
             if (u.phone == phone && u.role == "citizen") {
-                if (!password.empty() && !u.password.empty() && u.password != password) {
+                if (u.password != password) {
                     res.status = 401;
-                    res.set_content(R"({"error":"Incorrect password for this mobile number."})", "application/json");
+                    res.set_content(R"({"error":"Wrong password. Please check your password and try again."})", "application/json");
                     return;
                 }
                 json resp = {
@@ -372,33 +488,8 @@ void setupApiRoutes() {
             }
         }
 
-        // If phone not yet registered, auto-register citizen if name was sent
-        string name = body.value("name", "");
-        if (!name.empty()) {
-            UserAccount newUser;
-            newUser.phone = phone;
-            newUser.name = name;
-            newUser.password = password;
-            newUser.role = "citizen";
-            newUser.registeredAt = static_cast<long long>(time(nullptr));
-            allUsers.push_back(newUser);
-            saveUsersToFile();
-
-            json resp = {
-                {"success", true},
-                {"user", {
-                    {"phone", newUser.phone},
-                    {"name", newUser.name},
-                    {"role", newUser.role},
-                    {"registeredAt", newUser.registeredAt}
-                }}
-            };
-            res.set_content(resp.dump(2), "application/json");
-            return;
-        }
-
         res.status = 404;
-        res.set_content(R"({"error":"Account not found. Please click Sign Up to register."})", "application/json");
+        res.set_content(R"({"error":"Mobile number not registered. Please create a Citizen Account first."})", "application/json");
     });
 
     // Registered Citizens Directory (Admin Only)
@@ -463,6 +554,7 @@ void setupApiRoutes() {
     // Priority Queue: Ranked strictly by Binary Max-Heap (HeapSort O(N log N)) - Admin Only
     apiServer.Get("/api/priority-queue", [](const httplib::Request&, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(dataMutex);
+        syncDataStructures();
         vector<Complaint> ranked = priorityHeap.getPriorityRankedList();
         json arr = json::array();
         for (const auto& c : ranked) {
@@ -510,14 +602,39 @@ void setupApiRoutes() {
 
         c.description = body.value("description", string("Reported via photo geotag"));
         c.status = "Submitted";
-        c.safety = body.value("safety", (c.type == "Electrical hazard" ? 5 : c.type == "Pothole" ? 4 : 3));
-        c.severity = body.value("severity", 3);
-        c.people = body.value("people", 100);
         c.urgent = body.value("urgent", false);
         c.reportedAt = static_cast<long long>(time(nullptr));
         c.photoUrl = body.value("photoUrl", string(""));
         c.citizenPhone = body.value("citizenPhone", string(""));
         c.citizenName = body.value("citizenName", string("Citizen"));
+
+        // AI-based complaint analysis (Gemini/OpenAI/Groq or deterministic rule-based fallback)
+        AiAnalysisResult ai = AiService::analyzeComplaint(c.type, c.location, c.description);
+        c.safety = ai.safety;
+        c.severity = ai.severity;
+        c.locationSensitivity = ai.locationSensitivity;
+        c.emergencyOverride = ai.emergencyOverride;
+        c.aiReason = ai.reason;
+        c.aiSource = ai.source;
+
+        // Map AI peopleAffected (1-5) to people count for peopleScore()
+        if (ai.peopleAffected >= 5) c.people = 500;
+        else if (ai.peopleAffected == 4) c.people = 200;
+        else if (ai.peopleAffected == 3) c.people = 50;
+        else if (ai.peopleAffected == 2) c.people = 20;
+        else c.people = 5;
+
+        // Allow manual overrides if explicitly supplied in JSON payload (e.g. testing)
+        if (body.contains("safety")) c.safety = body["safety"].get<int>();
+        if (body.contains("severity")) c.severity = body["severity"].get<int>();
+        if (body.contains("locationSensitivity")) c.locationSensitivity = body["locationSensitivity"].get<int>();
+        if (body.contains("emergencyOverride")) c.emergencyOverride = body["emergencyOverride"].get<bool>();
+        if (body.contains("people")) c.people = body["people"].get<int>();
+        if (body.contains("aiReason")) c.aiReason = body["aiReason"].get<string>();
+
+        if (c.emergencyOverride) {
+            c.urgent = true;
+        }
 
         {
             std::lock_guard<std::mutex> lock(dataMutex);
@@ -525,7 +642,7 @@ void setupApiRoutes() {
             allComplaints.push_back(c);
             idIndex.insert(c);
             priorityHeap.insert(c);
-            auditTrail.append(c.id, "Registered", "", "Submitted", "Reported by " + c.citizenName, c.citizenPhone);
+            auditTrail.append(c.id, "Registered", "", "Submitted", "Reported by " + c.citizenName + " [AI Priority: " + to_string(c.priorityScore()) + "/100]", c.citizenPhone);
             saveComplaintsToFile();
         }
 
@@ -534,7 +651,7 @@ void setupApiRoutes() {
     });
 
     // Update status (Submitted -> In Progress -> Resolved -> Closed)
-    apiServer.Patch(R"(/api/complaints/(\d+)/status)", [](const httplib::Request& req, httplib::Response& res) {
+    auto handleStatusUpdate = [](const httplib::Request& req, httplib::Response& res) {
         int id = 0;
         try {
             id = stoi(req.matches[1].str());
@@ -560,7 +677,7 @@ void setupApiRoutes() {
         if (newStatus != "Submitted" && newStatus != "In Progress" &&
             newStatus != "Resolved" && newStatus != "Closed") {
             res.status = 400;
-            res.set_content(R"({"error":"Invalid status"})", "application/json");
+            res.set_content(R"({"error":"Invalid status. Allowed values: Submitted, In Progress, Resolved, Closed"})", "application/json");
             return;
         }
 
@@ -598,7 +715,48 @@ void setupApiRoutes() {
         }
 
         res.set_content(resultJson.dump(2), "application/json");
-    });
+    };
+
+    apiServer.Patch(R"(/api/complaints/(\d+)/status)", handleStatusUpdate);
+    apiServer.Post(R"(/api/complaints/(\d+)/status)", handleStatusUpdate);
+
+    // Delete Complaint
+    auto handleDeleteComplaint = [](const httplib::Request& req, httplib::Response& res) {
+        int id = 0;
+        try {
+            id = stoi(req.matches[1].str());
+        } catch (...) {
+            res.status = 400;
+            res.set_content(R"({"error":"Invalid complaint ID"})", "application/json");
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(dataMutex);
+        auto it = std::find_if(allComplaints.begin(), allComplaints.end(), [id](const Complaint& c) {
+            return c.id == id;
+        });
+
+        if (it == allComplaints.end()) {
+            res.status = 404;
+            res.set_content(R"({"error":"Complaint not found"})", "application/json");
+            return;
+        }
+
+        auditTrail.append(id, "Deleted", it->status, "Deleted", "Complaint removed by user", "Municipal Officer");
+        allComplaints.erase(it);
+        syncDataStructures();
+        saveComplaintsToFile();
+
+        json resp = {
+            {"success", true},
+            {"message", "Complaint deleted successfully"},
+            {"deletedId", id}
+        };
+        res.set_content(resp.dump(2), "application/json");
+    };
+
+    apiServer.Delete(R"(/api/complaints/(\d+))", handleDeleteComplaint);
+    apiServer.Post(R"(/api/complaints/(\d+)/delete)", handleDeleteComplaint);
 
     // Dijkstra dispatch route
     apiServer.Get("/api/dispatch-route", [](const httplib::Request&, httplib::Response& res) {
@@ -745,11 +903,12 @@ int main() {
     }
 
     serverRunning = true;
-    thread serverThread([]() {
+    std::string localIp = getLocalIpAddress();
+    thread serverThread([localIp]() {
         cout << "\n=======================================================\n"
              << "  * CivicPulse Real-Life Multi-User Engine ACTIVE\n"
              << "  * Local Access:   http://127.0.0.1:8080\n"
-             << "  * Phone Access:   http://192.168.0.102:8080\n"
+             << "  * Phone Access:   http://" << localIp << ":8080\n"
              << "=======================================================\n";
         apiServer.listen_after_bind();
     });
